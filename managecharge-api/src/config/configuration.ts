@@ -11,7 +11,7 @@ export default () => ({
   },
 
   database: {
-    uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/managecharge',
+    uri: process.env.MONGODB_URI || 'mongodb://managecharge_admin:managecharge_secret_2024@localhost:27017/managecharge?authSource=admin',
   },
 
   jwt: {

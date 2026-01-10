@@ -8,6 +8,9 @@ import { HttpExceptionFilter } from './common/index.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 
+// Módulos de negocio
+import { TenantsModule } from './modules/tenants/index.js';
+
 /**
  * AppModule - Módulo Principal
  */
@@ -23,10 +26,10 @@ import { AppService } from './app.service.js';
     // Conexión a MongoDB
     DatabaseModule,
 
-    // Módulos de negocio (se agregarán en próximas semanas)
-    // AuthModule,
-    // TenantsModule,
-    // UsersModule,
+    // Módulos de negocio
+    TenantsModule,
+    // UsersModule,    // ← Lo agregaremos después
+    // AuthModule,     // ← Lo agregaremos después
     // ClientsModule,
     // ServicesModule,
     // PaymentsModule,
