@@ -66,18 +66,25 @@ export class TenantsController {
   @ApiQuery({
     name: 'active',
     required: false,
-    type: Boolean,
-    description: 'Filtrar solo tenants activos (por defecto: true)',
+    enum: ['true', 'false'],
+    description: 'Filtrar por estado: true (activos), false (inactivos), no enviar nada (todos)',
   })
   @ApiResponse({ 
     status: 200, 
     description: 'Lista de tenants obtenida exitosamente',
   })
   async findAll(@Query('active') active?: string) {
-    // Convertir string a boolean (query params siempre son strings)
-    const onlyActive = active !== 'false';
+    // Convertir string a boolean o undefined
+    let isActive: boolean | undefined;
 
-    const tenants = await this.tenantsService.findAll(onlyActive);
+    if (active === 'true') {
+      isActive = true;
+    } else if (active === 'false') {
+      isActive = false;
+    }
+    // Si es 'all' o no se envía, isActive queda undefined (mostrar todos)
+
+    const tenants = await this.tenantsService.findAll(isActive);
 
     return {
       success: true,
@@ -85,6 +92,9 @@ export class TenantsController {
       data: tenants,
       meta: {
         total: tenants.length,
+        filter: {
+          active: isActive ?? 'all',
+        },
       },
     };
   }

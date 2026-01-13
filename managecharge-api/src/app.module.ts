@@ -10,6 +10,7 @@ import { AppService } from './app.service.js';
 
 // Módulos de negocio
 import { TenantsModule } from './modules/tenants/index.js';
+import { UsersModule } from './modules/users/index.js';
 
 /**
  * AppModule - Módulo Principal
@@ -28,7 +29,7 @@ import { TenantsModule } from './modules/tenants/index.js';
 
     // Módulos de negocio
     TenantsModule,
-    // UsersModule,    // ← Lo agregaremos después
+    UsersModule,
     // AuthModule,     // ← Lo agregaremos después
     // ClientsModule,
     // ServicesModule,

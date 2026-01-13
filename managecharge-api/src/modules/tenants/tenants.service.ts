@@ -77,19 +77,22 @@ export class TenantsService {
     /**
      * Obtener todos los Tenants
      * 
-     * @param onlyActive - Si es true, solo retorna tenants activos
+     * @param isActive - true: solo activos, false: solo inactivos, undefined: todos
      * @returns Lista de tenants
      * 
-     * @description Por defecto retorna todos los tenants.
-     * En producción, este endpoint debería estar protegido
+     * @description En producción, este endpoint debería estar protegido
      * y solo ser accesible por SUPER_ADMIN.
      */
-    async findAll(onlyActive: boolean = true): Promise<TenantDocument[]> {
-        const filter = onlyActive ? { isActive: true } : {};
+    async findAll(isActive?: boolean): Promise<TenantDocument[]> {
+        const filter: Record<string, unknown> = {};
+
+        if (isActive !== undefined) {
+            filter.isActive = isActive;
+        }
 
         return this.tenantModel
             .find(filter)
-            .sort({ createdAt: -1 }) // Más recientes primero
+            .sort({ createdAt: -1 })
             .exec();
     }
 
