@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_FILTER } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 
 import { configuration } from './config/index.js';
 import { DatabaseModule } from './database/index.js';
@@ -11,6 +11,10 @@ import { AppService } from './app.service.js';
 // Módulos de negocio
 import { TenantsModule } from './modules/tenants/index.js';
 import { UsersModule } from './modules/users/index.js';
+import { AuthModule } from './modules/auth/index.js';
+
+// Guards
+import { JwtAuthGuard } from './modules/auth/guards/index.js';
 
 /**
  * AppModule - Módulo Principal
@@ -30,7 +34,7 @@ import { UsersModule } from './modules/users/index.js';
     // Módulos de negocio
     TenantsModule,
     UsersModule,
-    // AuthModule,     // ← Lo agregaremos después
+    AuthModule,
     // ClientsModule,
     // ServicesModule,
     // PaymentsModule,
@@ -39,9 +43,18 @@ import { UsersModule } from './modules/users/index.js';
   controllers: [AppController],
   providers: [
     AppService,
+    
+    // Filtro global de excepciones
     {
       provide: APP_FILTER,
       useClass: HttpExceptionFilter,
+    },
+    
+    // Guard global de autenticación JWT
+    // Todas las rutas requieren autenticación excepto las marcadas con @Public()
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
     },
   ],
 })

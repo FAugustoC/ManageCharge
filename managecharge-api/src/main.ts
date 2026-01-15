@@ -1,24 +1,23 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, Logger } from '@nestjs/common';
+import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
 
 async function bootstrap() {
-  const logger = new Logger('Bootstrap');
-
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
-  
+
+  // Obtener configuración
   const port = configService.get<number>('app.port') || 3000;
   const apiPrefix = configService.get<string>('app.apiPrefix') || 'api/v1';
   const appName = configService.get<string>('app.name') || 'ManageCharge';
-  const nodeEnv = configService.get<string>('app.env') || 'development';
+  const environment = configService.get<string>('app.env') || 'development';
 
-  // Prefijo global
+  // Configurar prefijo global
   app.setGlobalPrefix(apiPrefix);
 
-  // Validación global
+  // Configurar validación global
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -30,49 +29,41 @@ async function bootstrap() {
     }),
   );
 
-  // CORS
+  // Configurar CORS
   app.enableCors({
     origin: configService.get<string>('app.frontendUrl') || 'http://localhost:3001',
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     credentials: true,
   });
 
-  // Swagger (solo en desarrollo)
-  if (nodeEnv !== 'production') {
-    const swaggerConfig = new DocumentBuilder()
-      .setTitle(`${appName} API`)
-      .setDescription(
-        `API de ${appName} - Sistema de gestión de cobros y clientes.`
-      )
+  // Configurar Swagger (solo en desarrollo)
+  if (environment === 'development') {
+    const config = new DocumentBuilder()
+      .setTitle(appName)
+      .setDescription('API de gestión de cobros y clientes')
       .setVersion('1.0')
+      // Agregar configuración de autenticación Bearer
       .addBearerAuth(
         {
           type: 'http',
           scheme: 'bearer',
           bearerFormat: 'JWT',
+          name: 'JWT',
+          description: 'Ingresa tu token JWT',
+          in: 'header',
         },
-        'JWT-auth',
+        'JWT-auth', // Este nombre se usa como referencia
       )
-      .addTag('Health', 'Verificación del sistema')
-      .addTag('Auth', 'Autenticación y autorización')
-      .addTag('Tenants', 'Gestión de empresas/freelancers')
-      .addTag('Users', 'Gestión de usuarios')
-      .addTag('Clients', 'Gestión de clientes')
-      .addTag('Services', 'Gestión de servicios')
-      .addTag('Payments', 'Gestión de pagos')
-      .addTag('Notifications', 'Sistema de notificaciones')
       .build();
 
-    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('docs', app, document);
 
-    logger.log(`📚 Swagger docs: http://localhost:${port}/docs`);
+    console.log(`[Bootstrap] 📚 Swagger docs: http://localhost:${port}/docs`);
   }
 
   await app.listen(port);
-
-  logger.log(`🚀 ${appName} corriendo en: http://localhost:${port}/${apiPrefix}`);
-  logger.log(`🌍 Ambiente: ${nodeEnv}`);
+  console.log(`[Bootstrap] 🚀 ${appName} corriendo en: http://localhost:${port}/${apiPrefix}`);
+  console.log(`[Bootstrap] 🌍 Ambiente: ${environment}`);
 }
 
 bootstrap();
