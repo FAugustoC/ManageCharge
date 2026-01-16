@@ -1,5 +1,25 @@
-import { Controller, Get, Post, Put, Patch, Delete, Body, Param, Query, HttpCode, HttpStatus, } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery, } from '@nestjs/swagger';
+import {
+  Controller,
+  Get,
+  Post,
+  Put,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  HttpCode,
+  HttpStatus,
+} from '@nestjs/common';
+
+import {
+  ApiTags,
+  ApiOperation,
+  ApiResponse,
+  ApiParam,
+  ApiQuery,
+  ApiBearerAuth,
+} from '@nestjs/swagger';
 
 import { TenantsService } from './tenants.service.js';
 import { CreateTenantDto, UpdateTenantDto } from './dto/index.js';
@@ -13,6 +33,7 @@ import { CreateTenantDto, UpdateTenantDto } from './dto/index.js';
  * Base URL: /api/v1/tenants
  */
 @ApiTags('Tenants') // Agrupa los endpoints en Swagger bajo "Tenants"
+@ApiBearerAuth('JWT-auth') // Indica que usa autenticación Bearer JWT
 @Controller('tenants') // Define la ruta base: /tenants
 export class TenantsController {
   /**

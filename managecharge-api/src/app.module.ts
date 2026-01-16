@@ -12,6 +12,7 @@ import { AppService } from './app.service.js';
 import { TenantsModule } from './modules/tenants/index.js';
 import { UsersModule } from './modules/users/index.js';
 import { AuthModule } from './modules/auth/index.js';
+import { ClientsModule} from './modules/clients/index.js';
 
 // Guards
 import { JwtAuthGuard } from './modules/auth/guards/index.js';
@@ -35,7 +36,7 @@ import { JwtAuthGuard } from './modules/auth/guards/index.js';
     TenantsModule,
     UsersModule,
     AuthModule,
-    // ClientsModule,
+    ClientsModule,
     // ServicesModule,
     // PaymentsModule,
     // NotificationsModule,
