@@ -1,16 +1,24 @@
 /**
  * Métodos de pago aceptados
+ * 
+ * @description Define cómo el cliente realizó el pago
  */
 export enum PaymentMethod {
-  /** Pago en efectivo */
+  /** Efectivo */
   CASH = 'cash',
-  
+
   /** Transferencia bancaria */
-  TRANSFER = 'transfer',
-  
-  /** Pago con tarjeta */
+  BANK_TRANSFER = 'bank_transfer',
+
+  /** Tarjeta de crédito/débito */
   CARD = 'card',
-  
-  /** Otros métodos */
+
+  /** Cheque */
+  CHECK = 'check',
+
+  /** PayPal u otro servicio similar */
+  PAYPAL = 'paypal',
+
+  /** Otro método */
   OTHER = 'other',
 }

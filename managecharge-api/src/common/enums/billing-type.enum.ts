@@ -8,12 +8,9 @@ export enum BillingType {
   /** Pago en cuotas - Monto total dividido en abonos */
   INSTALLMENTS = 'installments',
   
-  /** Pago mensual recurrente */
-  MONTHLY = 'monthly',
-  
-  /** Pago anual recurrente */
-  ANNUAL = 'annual',
-  
-  /** Configuración personalizada */
-  CUSTOM = 'custom',
+  /** Cobro recurrente mensual (sin fin definido) */
+  RECURRING_MONTHLY = 'recurring_monthly',
+
+  /** Cobro recurrente anual (sin fin definido) */
+  RECURRING_ANNUAL = 'recurring_annual',
 }
