@@ -50,18 +50,18 @@ export class ServicesController {
   constructor(private readonly servicesService: ServicesService) {}
 
   /**
-   * POST /services
-   * Crear un nuevo Service
-   */
+ * POST /services
+ * Crear un nuevo Service
+ */
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary: 'Crear un nuevo servicio',
-    description: 'Registra un nuevo servicio/contrato para un cliente',
+    description: 'Registra un nuevo servicio/contrato para un cliente. Los pagos se generan automáticamente.',
   })
   @ApiResponse({
     status: 201,
-    description: 'Servicio creado exitosamente',
+    description: 'Servicio creado exitosamente con sus pagos',
   })
   @ApiResponse({
     status: 400,
@@ -79,7 +79,7 @@ export class ServicesController {
     @Body() createServiceDto: CreateServiceDto,
     @CurrentUser() user: AuthenticatedUser,
   ) {
-    const service = await this.servicesService.create(
+    const result = await this.servicesService.create(
       createServiceDto,
       user.tenantId!,
       user.userId,
@@ -87,8 +87,11 @@ export class ServicesController {
 
     return {
       success: true,
-      message: 'Servicio creado exitosamente',
-      data: service,
+      message: `Servicio creado exitosamente con ${result.paymentsGenerated} pago(s) generado(s)`,
+      data: result.service,
+      meta: {
+        paymentsGenerated: result.paymentsGenerated,
+      },
     };
   }
 

@@ -1,9 +1,10 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Service, ServiceSchema } from './entities/index.js';
 import { ServicesService } from './services.service.js';
 import { ServicesController } from './services.controller.js';
 import { ClientsModule } from '../clients/index.js';
+import { PaymentsModule } from '../payments/index.js';
 
 /**
  * ServicesModule
@@ -13,6 +14,7 @@ import { ClientsModule } from '../clients/index.js';
  * 
  * Dependencias:
  * - ClientsModule: Para verificar que el cliente existe
+ * - PaymentsModule: Para generar pagos automáticamente
  */
 @Module({
   imports: [
@@ -23,6 +25,7 @@ import { ClientsModule } from '../clients/index.js';
       },
     ]),
     ClientsModule,
+    forwardRef(() => PaymentsModule),
   ],
   controllers: [
     ServicesController,

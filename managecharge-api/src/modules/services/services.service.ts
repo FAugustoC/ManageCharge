@@ -2,6 +2,8 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -12,6 +14,7 @@ import {
   ServiceStatus,
 } from '../../common/index.js';
 import { ClientsService } from '../clients/index.js';
+import { PaymentsService } from '../payments/payments.service.js';
 
 /**
  * ServicesService
@@ -24,6 +27,8 @@ export class ServicesService {
   constructor(
     @InjectModel(Service.name) private serviceModel: Model<ServiceDocument>,
     private clientsService: ClientsService,
+    @Inject(forwardRef(() => PaymentsService))
+    private paymentsService: PaymentsService,
   ) {}
 
   /**
@@ -32,13 +37,13 @@ export class ServicesService {
    * @param createServiceDto - Datos validados del nuevo servicio
    * @param tenantId - ID del tenant (desde el token JWT)
    * @param userId - ID del usuario que crea (desde el token JWT)
-   * @returns El servicio creado
+   * @returns El servicio creado con sus pagos generados
    */
   async create(
     createServiceDto: CreateServiceDto,
     tenantId: string,
     userId: string,
-  ): Promise<ServiceDocument> {
+  ): Promise<{ service: ServiceDocument; paymentsGenerated: number }> {
     // Verificar que el cliente existe y pertenece al tenant
     await this.clientsService.findById(createServiceDto.clientId, tenantId);
 
@@ -59,7 +64,18 @@ export class ServicesService {
         : undefined,
     });
 
-    return newService.save();
+    const savedService = await newService.save();
+
+    // Generar pagos automáticamente
+    const payments = await this.paymentsService.generatePaymentsForService(
+      savedService,
+      tenantId,
+    );
+
+    return {
+      service: savedService,
+      paymentsGenerated: payments.length,
+    };
   }
 
   /**
@@ -110,10 +126,6 @@ export class ServicesService {
 
   /**
    * Obtener todos los Services de un Tenant
-   * 
-   * @param tenantId - ID del tenant
-   * @param status - Filtrar por estado (opcional)
-   * @returns Lista de servicios del tenant
    */
   async findAllByTenant(
     tenantId: string,
@@ -137,10 +149,6 @@ export class ServicesService {
 
   /**
    * Obtener todos los Services de un Client
-   * 
-   * @param clientId - ID del cliente
-   * @param tenantId - ID del tenant (para verificar pertenencia)
-   * @returns Lista de servicios del cliente
    */
   async findAllByClient(
     clientId: string,
@@ -163,11 +171,6 @@ export class ServicesService {
 
   /**
    * Obtener un Service por su ID
-   * 
-   * @param id - ID del servicio
-   * @param tenantId - ID del tenant (para verificar pertenencia)
-   * @returns El servicio encontrado
-   * @throws NotFoundException si no existe o no pertenece al tenant
    */
   async findById(id: string, tenantId: string): Promise<ServiceDocument> {
     const filter: Record<string, unknown> = {
@@ -190,11 +193,6 @@ export class ServicesService {
 
   /**
    * Actualizar un Service
-   * 
-   * @param id - ID del servicio a actualizar
-   * @param updateServiceDto - Datos a actualizar
-   * @param tenantId - ID del tenant (para verificar pertenencia)
-   * @returns El servicio actualizado
    */
   async update(
     id: string,
@@ -206,7 +204,6 @@ export class ServicesService {
 
     // Si se actualiza la configuración de cuotas, validar
     if (updateServiceDto.billingType || updateServiceDto.installmentsCount || updateServiceDto.installmentsConfig) {
-      // Obtener el servicio actual para combinar con los nuevos datos
       const currentService = await this.findById(id, tenantId);
       
       const validationDto = {
@@ -242,9 +239,6 @@ export class ServicesService {
 
   /**
    * Actualizar el monto pagado de un servicio
-   * 
-   * @description Este método será llamado por PaymentsService
-   * cuando se registre un pago
    */
   async updatePaidAmount(
     id: string,
@@ -327,7 +321,6 @@ export class ServicesService {
    * Reactivar un Service
    */
   async reactivate(id: string, tenantId: string): Promise<ServiceDocument> {
-    // Buscar incluyendo inactivos
     const filter: Record<string, unknown> = {
       _id: new Types.ObjectId(id),
       tenantId: new Types.ObjectId(tenantId),
@@ -355,6 +348,10 @@ export class ServicesService {
    */
   async remove(id: string, tenantId: string): Promise<void> {
     const service = await this.findById(id, tenantId);
+    
+    // Eliminar los pagos asociados
+    await this.paymentsService.removeAllByService(id, tenantId);
+    
     await this.serviceModel.findByIdAndDelete(service._id).exec();
   }
 
@@ -419,7 +416,6 @@ export class ServicesService {
       summary.totalAmount += service.totalAmount;
       summary.paidAmount += service.paidAmount;
       
-      // Contar por estado
       summary.byStatus[service.status] = (summary.byStatus[service.status] || 0) + 1;
     }
 
