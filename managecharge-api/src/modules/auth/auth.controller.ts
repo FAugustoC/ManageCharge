@@ -16,7 +16,7 @@ import {
 } from '@nestjs/swagger';
 import { AuthGuard } from '@nestjs/passport';
 import { AuthService } from './auth.service.js';
-import { LoginDto, RegisterDto } from './dto/index.js';
+import { LoginDto, RegisterDto, RefreshTokenDto } from './dto/index.js';
 import { JwtAuthGuard } from './guards/index.js';
 import { Public, CurrentUser } from '../../common/index.js';
 import { GoogleProfile } from './strategies/index.js';
@@ -40,10 +40,11 @@ interface AuthenticatedUser {
 
 /**
  * DTO para refrescar tokens
- */
+
 class RefreshTokenDto {
   refreshToken: string;
 }
+*/
 
 /**
  * AuthController
@@ -60,7 +61,7 @@ class RefreshTokenDto {
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) { }
 
   /**
    * POST /auth/register
@@ -127,24 +128,34 @@ export class AuthController {
   /**
    * POST /auth/refresh
    * Refrescar tokens de acceso
-   */
+  */
   @Public()
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Refrescar tokens',
-    description: 'Obtiene nuevos tokens usando el refresh token',
+    description: 'Obtiene nuevos tokens de acceso y refresh usando un refresh token válido',
   })
   @ApiResponse({
     status: 200,
     description: 'Tokens renovados exitosamente',
+    schema: {
+      example: {
+        success: true,
+        message: 'Tokens renovados exitosamente',
+        data: {
+          accessToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+          refreshToken: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',
+        },
+      },
+    },
   })
   @ApiResponse({
     status: 401,
     description: 'Refresh token inválido o expirado',
   })
-  async refresh(@Body() body: RefreshTokenDto) {
-    const tokens = await this.authService.refreshTokens(body.refreshToken);
+  async refresh(@Body() refreshTokenDto: RefreshTokenDto) {  // ← Nombre más descriptivo
+    const tokens = await this.authService.refreshTokens(refreshTokenDto.refreshToken);
 
     return {
       success: true,

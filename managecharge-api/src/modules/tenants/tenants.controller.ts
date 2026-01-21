@@ -10,8 +10,9 @@ import {
   Query,
   HttpCode,
   HttpStatus,
+  UseGuards,
+  ForbiddenException,
 } from '@nestjs/common';
-
 import {
   ApiTags,
   ApiOperation,
@@ -23,48 +24,57 @@ import {
 
 import { TenantsService } from './tenants.service.js';
 import { CreateTenantDto, UpdateTenantDto } from './dto/index.js';
+import { 
+  Roles, 
+  CurrentUser, 
+  RolesGuard, 
+  UserRole,
+} from '../../common/index.js';
+
+/**
+ * Interfaz para el usuario autenticado
+ * Definida localmente para evitar problemas con isolatedModules
+ */
+interface AuthenticatedUser {
+  userId: string;
+  email: string;
+  role: UserRole;
+  tenantId?: string;
+}
 
 /**
  * TenantsController
  * 
  * @description Controlador REST para gestionar Tenants.
- * Define los endpoints HTTP disponibles para operaciones CRUD.
+ * 
+ * Permisos:
+ * - SUPER_ADMIN: Acceso completo a todos los tenants
+ * - TENANT_ADMIN: Solo puede ver/editar su propio tenant
+ * - TENANT_USER: Solo puede ver su propio tenant
  * 
  * Base URL: /api/v1/tenants
  */
-@ApiTags('Tenants') // Agrupa los endpoints en Swagger bajo "Tenants"
-@ApiBearerAuth('JWT-auth') // Indica que usa autenticación Bearer JWT
-@Controller('tenants') // Define la ruta base: /tenants
+@ApiTags('Tenants')
+@ApiBearerAuth('JWT-auth')
+@Controller('tenants')
 export class TenantsController {
-  /**
-   * Constructor con inyección del servicio
-   * 
-   * @param tenantsService - Servicio inyectado automáticamente por NestJS
-   */
   constructor(private readonly tenantsService: TenantsService) {}
 
   /**
    * POST /tenants
-   * Crear un nuevo Tenant
+   * Crear un nuevo Tenant (Solo SUPER_ADMIN)
    */
   @Post()
-  @HttpCode(HttpStatus.CREATED) // Retorna 201 en vez de 200
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
+  @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ 
-    summary: 'Crear un nuevo tenant',
+    summary: 'Crear un nuevo tenant (Solo SUPER_ADMIN)',
     description: 'Registra una nueva empresa o freelancer en ManageCharge',
   })
-  @ApiResponse({ 
-    status: 201, 
-    description: 'Tenant creado exitosamente',
-  })
-  @ApiResponse({ 
-    status: 400, 
-    description: 'Datos de entrada inválidos',
-  })
-  @ApiResponse({ 
-    status: 409, 
-    description: 'El slug o email ya están en uso',
-  })
+  @ApiResponse({ status: 201, description: 'Tenant creado exitosamente' })
+  @ApiResponse({ status: 403, description: 'No tienes permisos para crear tenants' })
+  @ApiResponse({ status: 409, description: 'El slug o email ya están en uso' })
   async create(@Body() createTenantDto: CreateTenantDto) {
     const tenant = await this.tenantsService.create(createTenantDto);
 
@@ -77,100 +87,108 @@ export class TenantsController {
 
   /**
    * GET /tenants
-   * Obtener todos los Tenants
+   * Obtener todos los Tenants (SUPER_ADMIN) o el propio tenant (otros roles)
    */
   @Get()
   @ApiOperation({ 
-    summary: 'Listar todos los tenants',
-    description: 'Obtiene la lista de todos los tenants registrados',
+    summary: 'Listar tenants',
+    description: 'SUPER_ADMIN: todos los tenants. Otros roles: solo su tenant.',
   })
   @ApiQuery({
     name: 'active',
     required: false,
     enum: ['true', 'false'],
-    description: 'Filtrar por estado: true (activos), false (inactivos), no enviar nada (todos)',
+    description: 'Filtrar por estado (solo SUPER_ADMIN)',
   })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Lista de tenants obtenida exitosamente',
-  })
-  async findAll(@Query('active') active?: string) {
-    // Convertir string a boolean o undefined
-    let isActive: boolean | undefined;
+  @ApiResponse({ status: 200, description: 'Lista de tenants obtenida exitosamente' })
+  async findAll(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('active') active?: string,
+  ) {
+    // SUPER_ADMIN puede ver todos los tenants
+    if (user.role === UserRole.SUPER_ADMIN) {
+      let isActive: boolean | undefined;
 
-    if (active === 'true') {
-      isActive = true;
-    } else if (active === 'false') {
-      isActive = false;
+      if (active === 'true') {
+        isActive = true;
+      } else if (active === 'false') {
+        isActive = false;
+      }
+
+      const tenants = await this.tenantsService.findAll(isActive);
+
+      return {
+        success: true,
+        message: 'Tenants obtenidos exitosamente',
+        data: tenants,
+        meta: {
+          total: tenants.length,
+          filter: { active: isActive ?? 'all' },
+        },
+      };
     }
-    // Si es 'all' o no se envía, isActive queda undefined (mostrar todos)
 
-    const tenants = await this.tenantsService.findAll(isActive);
+    // Otros roles solo pueden ver su propio tenant
+    if (!user.tenantId) {
+      return {
+        success: true,
+        message: 'No tienes un tenant asignado',
+        data: [],
+        meta: { total: 0 },
+      };
+    }
+
+    const tenant = await this.tenantsService.findById(user.tenantId);
 
     return {
       success: true,
-      message: 'Tenants obtenidos exitosamente',
-      data: tenants,
-      meta: {
-        total: tenants.length,
-        filter: {
-          active: isActive ?? 'all',
-        },
-      },
+      message: 'Tenant obtenido exitosamente',
+      data: [tenant],
+      meta: { total: 1 },
     };
   }
 
   /**
    * GET /tenants/count
-   * Contar tenants activos
+   * Contar tenants activos (Solo SUPER_ADMIN)
    */
   @Get('count')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   @ApiOperation({ 
-    summary: 'Contar tenants activos',
+    summary: 'Contar tenants activos (Solo SUPER_ADMIN)',
     description: 'Retorna el número total de tenants activos',
   })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Conteo obtenido exitosamente',
-  })
+  @ApiResponse({ status: 200, description: 'Conteo obtenido exitosamente' })
+  @ApiResponse({ status: 403, description: 'No tienes permisos' })
   async count() {
     const total = await this.tenantsService.countActive();
 
     return {
       success: true,
-      data: {
-        total,
-      },
+      data: { total },
     };
   }
 
   /**
    * GET /tenants/check-slug/:slug
-   * Verificar si un slug está disponible
+   * Verificar si un slug está disponible (Solo SUPER_ADMIN)
    */
   @Get('check-slug/:slug')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   @ApiOperation({ 
-    summary: 'Verificar disponibilidad de slug',
+    summary: 'Verificar disponibilidad de slug (Solo SUPER_ADMIN)',
     description: 'Comprueba si un slug está disponible para usar',
   })
-  @ApiParam({
-    name: 'slug',
-    description: 'Slug a verificar',
-    example: 'mi-empresa',
-  })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Resultado de la verificación',
-  })
+  @ApiParam({ name: 'slug', description: 'Slug a verificar', example: 'mi-empresa' })
+  @ApiResponse({ status: 200, description: 'Resultado de la verificación' })
   async checkSlug(@Param('slug') slug: string) {
     const isAvailable = await this.tenantsService.isSlugAvailable(slug);
 
     return {
       success: true,
-      data: {
-        slug,
-        isAvailable,
-      },
+      data: { slug, isAvailable },
     };
   }
 
@@ -181,23 +199,22 @@ export class TenantsController {
   @Get('by-slug/:slug')
   @ApiOperation({ 
     summary: 'Obtener tenant por slug',
-    description: 'Busca un tenant usando su slug único',
+    description: 'SUPER_ADMIN: cualquier tenant. Otros: solo si es su tenant.',
   })
-  @ApiParam({
-    name: 'slug',
-    description: 'Slug único del tenant',
-    example: 'agencia-digital-gt',
-  })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Tenant encontrado',
-  })
-  @ApiResponse({ 
-    status: 404, 
-    description: 'Tenant no encontrado',
-  })
-  async findBySlug(@Param('slug') slug: string) {
+  @ApiParam({ name: 'slug', description: 'Slug único del tenant', example: 'agencia-digital-gt' })
+  @ApiResponse({ status: 200, description: 'Tenant encontrado' })
+  @ApiResponse({ status: 403, description: 'No tienes permisos para ver este tenant' })
+  @ApiResponse({ status: 404, description: 'Tenant no encontrado' })
+  async findBySlug(
+    @Param('slug') slug: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
     const tenant = await this.tenantsService.findBySlug(slug);
+
+    // Verificar permisos
+    if (user.role !== UserRole.SUPER_ADMIN && tenant._id.toString() !== user.tenantId) {
+      throw new ForbiddenException('No tienes permisos para ver este tenant');
+    }
 
     return {
       success: true,
@@ -212,22 +229,21 @@ export class TenantsController {
   @Get(':id')
   @ApiOperation({ 
     summary: 'Obtener tenant por ID',
-    description: 'Busca un tenant usando su ID de MongoDB',
+    description: 'SUPER_ADMIN: cualquier tenant. Otros: solo si es su tenant.',
   })
-  @ApiParam({
-    name: 'id',
-    description: 'ID único del tenant (ObjectId)',
-    example: '507f1f77bcf86cd799439011',
-  })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Tenant encontrado',
-  })
-  @ApiResponse({ 
-    status: 404, 
-    description: 'Tenant no encontrado',
-  })
-  async findById(@Param('id') id: string) {
+  @ApiParam({ name: 'id', description: 'ID único del tenant (ObjectId)', example: '507f1f77bcf86cd799439011' })
+  @ApiResponse({ status: 200, description: 'Tenant encontrado' })
+  @ApiResponse({ status: 403, description: 'No tienes permisos para ver este tenant' })
+  @ApiResponse({ status: 404, description: 'Tenant no encontrado' })
+  async findById(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ) {
+    // Verificar permisos antes de buscar
+    if (user.role !== UserRole.SUPER_ADMIN && id !== user.tenantId) {
+      throw new ForbiddenException('No tienes permisos para ver este tenant');
+    }
+
     const tenant = await this.tenantsService.findById(id);
 
     return {
@@ -243,28 +259,24 @@ export class TenantsController {
   @Put(':id')
   @ApiOperation({ 
     summary: 'Actualizar tenant (completo)',
-    description: 'Actualiza todos los campos de un tenant',
+    description: 'SUPER_ADMIN: cualquier tenant. TENANT_ADMIN: solo su tenant.',
   })
-  @ApiParam({
-    name: 'id',
-    description: 'ID único del tenant',
-  })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Tenant actualizado exitosamente',
-  })
-  @ApiResponse({ 
-    status: 404, 
-    description: 'Tenant no encontrado',
-  })
-  @ApiResponse({ 
-    status: 409, 
-    description: 'El slug o email ya están en uso',
-  })
+  @ApiParam({ name: 'id', description: 'ID único del tenant' })
+  @ApiResponse({ status: 200, description: 'Tenant actualizado exitosamente' })
+  @ApiResponse({ status: 403, description: 'No tienes permisos para editar este tenant' })
+  @ApiResponse({ status: 404, description: 'Tenant no encontrado' })
   async update(
     @Param('id') id: string,
     @Body() updateTenantDto: UpdateTenantDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
+    // Solo SUPER_ADMIN o TENANT_ADMIN de ese tenant pueden editar
+    if (user.role !== UserRole.SUPER_ADMIN) {
+      if (user.role !== UserRole.TENANT_ADMIN || id !== user.tenantId) {
+        throw new ForbiddenException('No tienes permisos para editar este tenant');
+      }
+    }
+
     const tenant = await this.tenantsService.update(id, updateTenantDto);
 
     return {
@@ -277,28 +289,26 @@ export class TenantsController {
   /**
    * PATCH /tenants/:id
    * Actualizar un Tenant parcialmente
-   * 
-   * @description PUT y PATCH hacen lo mismo aquí porque
-   * UpdateTenantDto ya tiene todos los campos opcionales.
-   * La diferencia es semántica (REST conventions).
    */
   @Patch(':id')
   @ApiOperation({ 
     summary: 'Actualizar tenant (parcial)',
-    description: 'Actualiza solo los campos enviados',
+    description: 'SUPER_ADMIN: cualquier tenant. TENANT_ADMIN: solo su tenant.',
   })
-  @ApiParam({
-    name: 'id',
-    description: 'ID único del tenant',
-  })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Tenant actualizado exitosamente',
-  })
+  @ApiParam({ name: 'id', description: 'ID único del tenant' })
+  @ApiResponse({ status: 200, description: 'Tenant actualizado exitosamente' })
   async partialUpdate(
     @Param('id') id: string,
     @Body() updateTenantDto: UpdateTenantDto,
+    @CurrentUser() user: AuthenticatedUser,
   ) {
+    // Solo SUPER_ADMIN o TENANT_ADMIN de ese tenant pueden editar
+    if (user.role !== UserRole.SUPER_ADMIN) {
+      if (user.role !== UserRole.TENANT_ADMIN || id !== user.tenantId) {
+        throw new ForbiddenException('No tienes permisos para editar este tenant');
+      }
+    }
+
     const tenant = await this.tenantsService.update(id, updateTenantDto);
 
     return {
@@ -310,25 +320,18 @@ export class TenantsController {
 
   /**
    * PATCH /tenants/:id/deactivate
-   * Desactivar un Tenant
+   * Desactivar un Tenant (Solo SUPER_ADMIN)
    */
   @Patch(':id/deactivate')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   @ApiOperation({ 
-    summary: 'Desactivar tenant',
+    summary: 'Desactivar tenant (Solo SUPER_ADMIN)',
     description: 'Desactiva un tenant sin eliminarlo (soft delete)',
   })
-  @ApiParam({
-    name: 'id',
-    description: 'ID único del tenant',
-  })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Tenant desactivado exitosamente',
-  })
-  @ApiResponse({ 
-    status: 404, 
-    description: 'Tenant no encontrado',
-  })
+  @ApiParam({ name: 'id', description: 'ID único del tenant' })
+  @ApiResponse({ status: 200, description: 'Tenant desactivado exitosamente' })
+  @ApiResponse({ status: 403, description: 'No tienes permisos' })
   async deactivate(@Param('id') id: string) {
     const tenant = await this.tenantsService.deactivate(id);
 
@@ -341,25 +344,18 @@ export class TenantsController {
 
   /**
    * PATCH /tenants/:id/reactivate
-   * Reactivar un Tenant
+   * Reactivar un Tenant (Solo SUPER_ADMIN)
    */
   @Patch(':id/reactivate')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   @ApiOperation({ 
-    summary: 'Reactivar tenant',
+    summary: 'Reactivar tenant (Solo SUPER_ADMIN)',
     description: 'Reactiva un tenant previamente desactivado',
   })
-  @ApiParam({
-    name: 'id',
-    description: 'ID único del tenant',
-  })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Tenant reactivado exitosamente',
-  })
-  @ApiResponse({ 
-    status: 404, 
-    description: 'Tenant no encontrado',
-  })
+  @ApiParam({ name: 'id', description: 'ID único del tenant' })
+  @ApiResponse({ status: 200, description: 'Tenant reactivado exitosamente' })
+  @ApiResponse({ status: 403, description: 'No tienes permisos' })
   async reactivate(@Param('id') id: string) {
     const tenant = await this.tenantsService.reactivate(id);
 
@@ -372,26 +368,19 @@ export class TenantsController {
 
   /**
    * DELETE /tenants/:id
-   * Eliminar un Tenant permanentemente
+   * Eliminar un Tenant permanentemente (Solo SUPER_ADMIN)
    */
   @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.SUPER_ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ 
-    summary: 'Eliminar tenant',
+    summary: 'Eliminar tenant (Solo SUPER_ADMIN)',
     description: '⚠️ CUIDADO: Elimina permanentemente un tenant. Esta acción es irreversible.',
   })
-  @ApiParam({
-    name: 'id',
-    description: 'ID único del tenant',
-  })
-  @ApiResponse({ 
-    status: 200, 
-    description: 'Tenant eliminado exitosamente',
-  })
-  @ApiResponse({ 
-    status: 404, 
-    description: 'Tenant no encontrado',
-  })
+  @ApiParam({ name: 'id', description: 'ID único del tenant' })
+  @ApiResponse({ status: 200, description: 'Tenant eliminado exitosamente' })
+  @ApiResponse({ status: 403, description: 'No tienes permisos' })
   async remove(@Param('id') id: string) {
     await this.tenantsService.remove(id);
 

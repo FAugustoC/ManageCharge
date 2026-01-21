@@ -10,9 +10,9 @@ import { UsersService } from '../users/index.js';
 import { TenantsService } from '../tenants/index.js';
 import { LoginDto, RegisterDto } from './dto/index.js';
 import { GoogleProfile } from './strategies/index.js';
-import { 
-  JwtPayload, 
-  AuthProvider, 
+import {
+  JwtPayload,
+  AuthProvider,
   UserRole,
 } from '../../common/index.js';
 
@@ -26,7 +26,12 @@ export interface AuthResponse {
     firstName: string;
     lastName: string;
     role: UserRole;
-    tenantId?: string;
+    tenantId: string;
+  };
+  tenant: {
+    id: string;
+    name: string;
+    slug: string;
   };
   accessToken: string;
   refreshToken: string;
@@ -36,7 +41,7 @@ export interface AuthResponse {
  * AuthService
  * 
  * @description Servicio que maneja toda la lógica de autenticación:
- * - Registro de nuevos usuarios
+ * - Registro de nuevos usuarios (crea Tenant + Usuario automáticamente)
  * - Login con email/password
  * - Login con Google OAuth
  * - Generación y validación de tokens JWT
@@ -48,41 +53,74 @@ export class AuthService {
     private tenantsService: TenantsService,
     private jwtService: JwtService,
     private configService: ConfigService,
-  ) {}
+  ) { }
+
+  /**
+   * Generar slug único a partir del nombre de empresa
+   */
+  private generateSlug(companyName: string): string {
+    const baseSlug = companyName
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // Eliminar acentos
+      .replace(/[^a-z0-9\s-]/g, '') // Solo letras, números, espacios y guiones
+      .replace(/\s+/g, '-') // Espacios a guiones
+      .replace(/-+/g, '-') // Múltiples guiones a uno
+      .trim();
+
+    // Agregar timestamp para garantizar unicidad
+    const timestamp = Date.now().toString(36);
+    return `${baseSlug}-${timestamp}`;
+  }
 
   /**
    * Registrar un nuevo usuario
    * 
+   * @description Crea automáticamente:
+   * 1. Un Tenant (espacio de trabajo)
+   * 2. Un Usuario como TENANT_ADMIN
+   * 
    * @param registerDto - Datos de registro
-   * @returns Usuario creado con tokens de acceso
+   * @returns Usuario y Tenant creados con tokens de acceso
    * @throws ConflictException si el email ya existe
    */
   async register(registerDto: RegisterDto): Promise<AuthResponse> {
     // Verificar si el email ya existe
     const existingUser = await this.usersService.findByEmail(registerDto.email);
-    
+
     if (existingUser) {
       throw new ConflictException('El email ya está registrado');
     }
 
-    // Si se proporciona tenantId, verificar que exista
-    if (registerDto.tenantId) {
-      await this.tenantsService.findById(registerDto.tenantId);
-    }
+    // 1. Crear el Tenant automáticamente
+    const slug = this.generateSlug(registerDto.companyName);
 
-    // Crear el usuario
-    const user = await this.usersService.create({
-      ...registerDto,
-      authProvider: AuthProvider.LOCAL,
-      role: UserRole.TENANT_USER, // Por defecto, usuarios nuevos son TENANT_USER
+    const tenant = await this.tenantsService.create({
+      name: registerDto.companyName,
+      slug: slug,
+      email: registerDto.email,
+      phone: registerDto.phone,
+      companyName: registerDto.companyName,
     });
 
-    // Generar tokens
+    // 2. Crear el Usuario como TENANT_ADMIN
+    const user = await this.usersService.create({
+      email: registerDto.email,
+      password: registerDto.password,
+      firstName: registerDto.firstName,
+      lastName: registerDto.lastName,
+      phone: registerDto.phone,
+      tenantId: tenant._id.toString(),
+      authProvider: AuthProvider.LOCAL,
+      role: UserRole.TENANT_ADMIN, // Dueño del tenant
+    });
+
+    // 3. Generar tokens
     const tokens = await this.generateTokens({
       sub: user._id.toString(),
       email: user.email,
       role: user.role,
-      tenantId: user.tenantId?.toString() ?? null,
+      tenantId: tenant._id.toString(),
     });
 
     return {
@@ -92,7 +130,12 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         role: user.role,
-        tenantId: user.tenantId?.toString(),
+        tenantId: tenant._id.toString(),
+      },
+      tenant: {
+        id: tenant._id.toString(),
+        name: tenant.name,
+        slug: tenant.slug,
       },
       ...tokens,
     };
@@ -143,6 +186,18 @@ export class AuthService {
     // Actualizar fecha de último login
     await this.usersService.updateLastLogin(user._id.toString());
 
+    // Obtener datos del tenant
+    let tenantData = { id: '', name: '', slug: '' };
+
+    if (user.tenantId) {
+      const tenant = await this.tenantsService.findById(user.tenantId.toString());
+      tenantData = {
+        id: tenant._id.toString(),
+        name: tenant.name,
+        slug: tenant.slug,
+      };
+    }
+
     // Generar tokens
     const tokens = await this.generateTokens({
       sub: user._id.toString(),
@@ -158,8 +213,9 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         role: user.role,
-        tenantId: user.tenantId?.toString(),
+        tenantId: user.tenantId?.toString() || '',
       },
+      tenant: tenantData,
       ...tokens,
     };
   }
@@ -170,8 +226,8 @@ export class AuthService {
    * @param googleProfile - Perfil del usuario de Google
    * @returns Usuario autenticado con tokens de acceso
    * 
-   * @description Si el usuario no existe, lo crea automáticamente.
-   * Si ya existe con el mismo email, vincula la cuenta de Google.
+   * @description Si el usuario no existe, crea Tenant + Usuario automáticamente.
+   * Si ya existe, simplemente inicia sesión.
    */
   async googleLogin(googleProfile: GoogleProfile): Promise<AuthResponse> {
     // Buscar usuario por providerId de Google
@@ -179,6 +235,8 @@ export class AuthService {
       AuthProvider.GOOGLE,
       googleProfile.googleId,
     );
+
+    let tenant;
 
     // Si no existe por providerId, buscar por email
     if (!user) {
@@ -193,17 +251,38 @@ export class AuthService {
           );
         }
         user = existingUser;
+
+        // Obtener tenant existente
+        if (user.tenantId) {
+          tenant = await this.tenantsService.findById(user.tenantId.toString());
+        }
       } else {
-        // Crear nuevo usuario con datos de Google
+        // Crear nuevo Tenant + Usuario con datos de Google
+        const companyName = `${googleProfile.firstName} ${googleProfile.lastName}`;
+        const slug = this.generateSlug(companyName);
+
+        tenant = await this.tenantsService.create({
+          name: companyName,
+          slug: slug,
+          email: googleProfile.email,
+          companyName: companyName,
+        });
+
         user = await this.usersService.create({
           email: googleProfile.email,
           firstName: googleProfile.firstName,
           lastName: googleProfile.lastName,
           avatar: googleProfile.picture,
+          tenantId: tenant._id.toString(),
           authProvider: AuthProvider.GOOGLE,
           providerId: googleProfile.googleId,
-          role: UserRole.TENANT_USER,
+          role: UserRole.TENANT_ADMIN,
         });
+      }
+    } else {
+      // Usuario existe, obtener su tenant
+      if (user.tenantId) {
+        tenant = await this.tenantsService.findById(user.tenantId.toString());
       }
     }
 
@@ -230,8 +309,13 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         role: user.role,
-        tenantId: user.tenantId?.toString(),
+        tenantId: user.tenantId?.toString() || '',
       },
+      tenant: tenant ? {
+        id: tenant._id.toString(),
+        name: tenant.name,
+        slug: tenant.slug,
+      } : { id: '', name: '', slug: '' },
       ...tokens,
     };
   }
@@ -270,48 +354,66 @@ export class AuthService {
   }
 
   /**
- * Generar tokens JWT (access y refresh)
- * 
- * @param payload - Datos a incluir en el token
- * @returns Access token y refresh token
- */
-private async generateTokens(
-  payload: JwtPayload,
-): Promise<{ accessToken: string; refreshToken: string }> {
-  // Obtener configuración
-  const jwtSecret = this.configService.get<string>('jwt.secret') || 'default-secret';
+   * Generar tokens JWT (access y refresh)
+   * 
+   * @param payload - Datos a incluir en el token
+   * @returns Access token y refresh token
+   */
+  private async generateTokens(
+    payload: JwtPayload,
+  ): Promise<{ accessToken: string; refreshToken: string }> {
+    // Obtener configuración desde variables de entorno
+    const jwtSecret = this.configService.get<string>('jwt.secret');
+    const accessTokenExpiry = this.configService.get<number>('jwt.accessTokenExpiry');
+    const refreshTokenExpiry = this.configService.get<number>('jwt.refreshTokenExpiry');
 
-  // Crear el payload como objeto plano
+    if (!jwtSecret) {
+      throw new Error('JWT_SECRET no está configurado en las variables de entorno');
+    }
+
+    // Crear el payload como objeto plano
     const tokenPayload: Record<string, unknown> = {
-        sub: payload.sub,
-        email: payload.email,
-        role: payload.role,
-        tenantId: payload.tenantId,
+      sub: payload.sub,
+      email: payload.email,
+      role: payload.role,
+      tenantId: payload.tenantId,
     };
 
-    // Generar Access Token (15 minutos)
+    // Generar Access Token
     const accessToken = await this.jwtService.signAsync(tokenPayload, {
-        secret: jwtSecret,
-        expiresIn: 900, // 15 minutos en segundos
+      secret: jwtSecret,
+      expiresIn: accessTokenExpiry,
     });
 
-    // Generar Refresh Token (7 días)
+    // Generar Refresh Token
     const refreshToken = await this.jwtService.signAsync(tokenPayload, {
-        secret: jwtSecret,
-        expiresIn: 604800, // 7 días en segundos
+      secret: jwtSecret,
+      expiresIn: refreshTokenExpiry,
     });
 
     return { accessToken, refreshToken };
-}
+  }
 
   /**
-   * Obtener perfil del usuario actual
-   * 
-   * @param userId - ID del usuario autenticado
-   * @returns Datos del usuario
-   */
+ * Obtener perfil del usuario actual
+ * 
+ * @param userId - ID del usuario autenticado
+ * @returns Datos del usuario
+ */
   async getProfile(userId: string) {
     const user = await this.usersService.findById(userId);
+
+    // Obtener datos del tenant si existe
+    let tenantData: { id: string; name: string; slug: string } | null = null;
+
+    if (user.tenantId) {
+      const tenant = await this.tenantsService.findById(user.tenantId.toString());
+      tenantData = {
+        id: tenant._id.toString(),
+        name: tenant.name,
+        slug: tenant.slug,
+      };
+    }
 
     return {
       id: user._id.toString(),
@@ -321,6 +423,7 @@ private async generateTokens(
       phone: user.phone,
       role: user.role,
       tenantId: user.tenantId?.toString(),
+      tenant: tenantData,
       avatar: user.avatar,
       authProvider: user.authProvider,
       emailVerified: user.emailVerified,
