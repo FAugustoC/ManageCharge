@@ -29,12 +29,6 @@ export const PAGINATION = {
   MAX_LIMIT: 100,
 } as const;
 
-/** Configuración de JWT */
-export const JWT_CONFIG = {
-  ACCESS_TOKEN_EXPIRY: '15m',
-  REFRESH_TOKEN_EXPIRY: '7d',
-} as const;
-
 /** Configuración de contraseñas */
 export const PASSWORD_CONFIG = {
   MIN_LENGTH: 8,
