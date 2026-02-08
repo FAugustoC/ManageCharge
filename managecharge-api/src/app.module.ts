@@ -15,6 +15,7 @@ import { AuthModule } from './modules/auth/index.js';
 import { ClientsModule} from './modules/clients/index.js';
 import { ServicesModule } from './modules/services/index.js';
 import { PaymentsModule } from './modules/payments/index.js';
+import { SuperAdminModule } from './modules/super-admin/index.js';
 
 // Guards
 import { JwtAuthGuard } from './modules/auth/guards/index.js';
@@ -41,6 +42,7 @@ import { JwtAuthGuard } from './modules/auth/guards/index.js';
     ClientsModule,
     ServicesModule,
     PaymentsModule,
+    SuperAdminModule,
     // NotificationsModule,
   ],
   controllers: [AppController],
