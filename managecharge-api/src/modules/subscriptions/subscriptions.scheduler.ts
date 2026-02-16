@@ -1,8 +1,3 @@
-import { Injectable, Logger } from '@nestjs/common';
-import { Cron, CronExpression } from '@nestjs/schedule';
-import { ConfigService } from '@nestjs/config';
-import { SubscriptionsService } from './subscriptions.service.js';
-
 /**
  * SubscriptionsScheduler
  *
@@ -10,60 +5,99 @@ import { SubscriptionsService } from './subscriptions.service.js';
  * de suscripciones y downgrade de cuentas expiradas.
  *
  * Cron Jobs:
- * 1. processRenewals - Intenta cobrar suscripciones vencidas
- *    Ejecuta: Cada 2 horas entre 8am-8pm (configurable)
- *
- * 2. processDowngrades - Degrada cuentas que agotaron intentos
- *    Ejecuta: Todos los días a medianoche
- *
- * 3. logDailyStats - Log de estadísticas diarias
- *    Ejecuta: Todos los días a las 6am
+ * 1. processRenewals - Configurable desde .env
+ * 2. processDowngrades - Fijo: Medianoche
+ * 3. logDailyStats - Fijo: 6am
  */
+
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Cron, CronExpression, SchedulerRegistry } from '@nestjs/schedule';
+import { ConfigService } from '@nestjs/config';
+import { CronJob } from 'cron';
+import { SubscriptionsService } from './subscriptions.service.js';
+
 @Injectable()
-export class SubscriptionsScheduler {
+export class SubscriptionsScheduler implements OnModuleInit {
   private readonly logger = new Logger(SubscriptionsScheduler.name);
 
   constructor(
     private readonly subscriptionsService: SubscriptionsService,
     private readonly configService: ConfigService,
-  ) {}
+    private readonly schedulerRegistry: SchedulerRegistry,
+  ) {
+    this.logger.log('🚀 SubscriptionsScheduler inicializado');
+    
+    const autoChargeEnabled = this.configService.get<boolean>(
+      'subscriptions.autoChargeEnabled',
+    );
+    const cronSchedule = this.configService.get<string>(
+      'subscriptions.cronSchedule',
+    );
+    
+    this.logger.log(`⚙️ autoChargeEnabled: ${autoChargeEnabled}`);
+    this.logger.log(`⚙️ cronSchedule desde config: ${cronSchedule}`);
+  }
+
+  /**
+   * Se ejecuta después de que el módulo se inicializa
+   * Registra el cron dinámicamente usando SchedulerRegistry
+   */
+  onModuleInit() {
+    const cronSchedule = this.configService.get<string>(
+      'subscriptions.cronSchedule',
+      '0 0 */2 * * *', // Default: cada 2 horas
+    );
+
+    this.logger.log(`📅 Registrando cron de renovaciones: ${cronSchedule}`);
+
+    try {
+      // Crear el cron job
+      const job = new CronJob(
+        cronSchedule,
+        () => {
+          this.processRenewals();
+        },
+        null,        // onComplete
+        false,       // start (lo iniciamos manualmente abajo)
+        'UTC',       // timezone
+      );
+
+      // Registrarlo en el registry
+      this.schedulerRegistry.addCronJob('subscription-renewals', job);
+      
+      // Iniciar el job
+      job.start();
+
+      this.logger.log('✅ Cron de renovaciones registrado y activo');
+      this.logger.log(`⏰ Próxima ejecución: ${job.nextDate().toString()}`);
+    } catch (error) {
+      this.logger.error(
+        `❌ Error al registrar cron de renovaciones: ${error.message}`,
+        error.stack,
+      );
+    }
+  }
 
   /**
    * Procesar renovaciones automáticas
-   *
-   * @description Busca tenants con suscripción vencida o en
-   * grace period y que tengan autoRenew = true.
-   * Respeta el timezone del tenant (solo cobra entre 8am-8pm).
-   *
-   * Schedule configurable desde .env:
-   * SUBSCRIPTION_RETRY_CRON=0 *\/2 8-20 * * *
-   *
-   * Default: Cada 2 horas entre 8am y 8pm
+   * YA NO usa el decorador @Cron
    */
-  @Cron(
-    process.env.SUBSCRIPTION_RETRY_CRON || '0 0 */2 * * *',
-    {
-      name: 'subscription-renewals',
-      timeZone: 'UTC',
-    },
-  )
   async processRenewals(): Promise<void> {
-    // Verificar que el cobro automático está habilitado
+    this.logger.warn('⏰ CRON EJECUTÁNDOSE - processRenewals()');
+    
     const autoChargeEnabled = this.configService.get<boolean>(
       'subscriptions.autoChargeEnabled',
       true,
     );
 
+    this.logger.log(`🔍 autoChargeEnabled: ${autoChargeEnabled}`);
+
     if (!autoChargeEnabled) {
-      this.logger.debug(
-        'Cobro automático deshabilitado. Saltando proceso de renovación.',
-      );
+      this.logger.debug('Cobro automático deshabilitado');
       return;
     }
 
-    this.logger.log(
-      '🔄 Iniciando proceso de renovaciones automáticas...',
-    );
+    this.logger.log('🔄 Iniciando proceso de renovaciones automáticas...');
 
     const startTime = Date.now();
 
@@ -84,35 +118,26 @@ export class SubscriptionsScheduler {
 
   /**
    * Procesar downgrades automáticos
-   *
-   * @description Se ejecuta todos los días a medianoche.
-   * Degrada a FREE los tenants que:
-   * 1. Agotaron sus 7 intentos de cobro
-   * 2. Cancelaron y su periodo ya terminó
-   *
-   * Schedule fijo: Todos los días a medianoche UTC
+   * Usa decorador @Cron porque es un schedule fijo
    */
   @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT, {
     name: 'subscription-downgrades',
     timeZone: 'UTC',
   })
   async processDowngrades(): Promise<void> {
-    // Verificar que el downgrade automático está habilitado
+    this.logger.warn('⏰ CRON EJECUTÁNDOSE - processDowngrades()');
+    
     const autoDowngradeEnabled = this.configService.get<boolean>(
       'subscriptions.autoDowngradeEnabled',
       true,
     );
 
     if (!autoDowngradeEnabled) {
-      this.logger.debug(
-        'Downgrade automático deshabilitado. Saltando proceso.',
-      );
+      this.logger.debug('Downgrade automático deshabilitado');
       return;
     }
 
-    this.logger.log(
-      '📉 Iniciando proceso de downgrades automáticos...',
-    );
+    this.logger.log('📉 Iniciando proceso de downgrades automáticos...');
 
     const startTime = Date.now();
 
@@ -133,18 +158,14 @@ export class SubscriptionsScheduler {
 
   /**
    * Log de estadísticas diarias
-   *
-   * @description Se ejecuta todos los días a las 6am UTC.
-   * Registra en los logs información del estado
-   * de las suscripciones para monitoreo.
-   *
-   * Schedule fijo: Todos los días a las 6am UTC
+   * Usa decorador @Cron porque es un schedule fijo
    */
   @Cron(CronExpression.EVERY_DAY_AT_6AM, {
     name: 'subscription-daily-stats',
     timeZone: 'UTC',
   })
   async logDailyStats(): Promise<void> {
+    this.logger.warn('⏰ CRON EJECUTÁNDOSE - logDailyStats()');
     this.logger.log('📊 Generando estadísticas diarias de suscripciones...');
 
     try {

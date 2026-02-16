@@ -1086,39 +1086,53 @@ export class SubscriptionsService {
 
     /**
      * Renovar suscripción después de cobro exitoso
-     */
+     * 
+     * @important El nuevo periodo SIEMPRE empieza desde la fecha
+     * de vencimiento original, NO desde la fecha de cobro exitoso.
+     * Esto previene que usuarios ganen días gratis al retrasar el pago.
+    */
     private async renewSubscription(
-        tenant: TenantDocument,
-        transactionId: string,
+    tenant: TenantDocument,
+    transactionId: string,
     ): Promise<void> {
-        const now = new Date();
-        const newPeriodEnd = this.calculatePeriodEnd(
-            tenant.subscription.plan as SubscriptionPlan,
-            now,
-        );
+    // CORRECTO - Usar fecha de vencimiento original
+    const originalPeriodEnd = new Date(tenant.subscription.currentPeriodEnd);
+    
+    // Calcular nuevo periodo desde el vencimiento original
+    const newPeriodStart = originalPeriodEnd;
+    const newPeriodEnd = this.calculatePeriodEnd(
+        tenant.subscription.plan as SubscriptionPlan,
+        newPeriodStart,  // ← Desde el vencimiento, NO desde hoy
+    );
 
-        await this.tenantModel.findByIdAndUpdate(
-            tenant._id,
-            {
-                $set: {
-                    'subscription.status': SubscriptionStatus.ACTIVE,
-                    'subscription.currentPeriodStart': now,
-                    'subscription.currentPeriodEnd': newPeriodEnd,
-                    'subscription.retryAttempts': 0,
-                    'subscription.lastRetryDate': null,
-                    'subscription.nextRetryDate': null,
-                },
-                $push: {
-                    'subscription.subscriptionHistory': {
-                        plan: tenant.subscription.plan,
-                        startDate: tenant.subscription.currentPeriodStart,
-                        endDate: now,
-                        status: 'completed',
-                        reason: `Renewed - Transaction: ${transactionId}`,
-                    },
-                },
+    this.logger.log(
+        `Renovando tenant ${tenant._id}: ` +
+        `Periodo original: ${tenant.subscription.currentPeriodStart.toISOString()} - ${originalPeriodEnd.toISOString()} | ` +
+        `Nuevo periodo: ${newPeriodStart.toISOString()} - ${newPeriodEnd.toISOString()}`
+    );
+
+    await this.tenantModel.findByIdAndUpdate(
+        tenant._id,
+        {
+        $set: {
+            'subscription.status': SubscriptionStatus.ACTIVE,
+            'subscription.currentPeriodStart': newPeriodStart,      // ← Vencimiento original
+            'subscription.currentPeriodEnd': newPeriodEnd,         // ← +1 mes desde vencimiento
+            'subscription.retryAttempts': 0,
+            'subscription.lastRetryDate': null,
+            'subscription.nextRetryDate': null,
+        },
+        $push: {
+            'subscription.subscriptionHistory': {
+            plan: tenant.subscription.plan,
+            startDate: tenant.subscription.currentPeriodStart,
+            endDate: originalPeriodEnd,  // ← Fecha real de fin del periodo anterior
+            status: 'completed',
+            reason: `Renewed - Transaction: ${transactionId}`,
             },
-        );
+        },
+        },
+    );
     }
 
     /**
