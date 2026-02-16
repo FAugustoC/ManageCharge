@@ -34,3 +34,48 @@ export const PASSWORD_CONFIG = {
   MIN_LENGTH: 8,
   SALT_ROUNDS: 10,
 } as const;
+
+
+/**
+ * Features por plan de suscripción
+ */
+export const SUBSCRIPTION_FEATURES = {
+  FREE: {
+    clients: true,
+    services: true,
+    payments: true,
+    pushNotifications: true,
+    emailNotifications: false, // ❌ Solo push
+    whatsappNotifications: false, // ❌ Solo push
+    maxClients: undefined,
+    maxServices: undefined, 
+  },
+  PREMIUM_MONTHLY: {
+    clients: true,
+    services: true,
+    payments: true,
+    pushNotifications: true,
+    emailNotifications: true,
+    whatsappNotifications: true,
+    maxClients: undefined,
+    maxServices: undefined,
+  },
+  PREMIUM_ANNUAL: {
+    clients: true,
+    services: true,
+    payments: true,
+    pushNotifications: true,
+    emailNotifications: true,
+    whatsappNotifications: true,
+    maxClients: undefined,
+    maxServices: undefined,
+  },
+} as const;
+
+/**
+ * Configuración de reintentos de cobro
+ */
+export const SUBSCRIPTION_RETRY_CONFIG = {
+  MAX_ATTEMPTS: 7, // 7 días de gracia
+  GRACE_PERIOD_DAYS: 7,
+} as const;

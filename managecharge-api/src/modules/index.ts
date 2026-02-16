@@ -17,3 +17,6 @@
 
 // Semana 5
 // export * from './notifications/index.js';
+
+// Semana 6
+// export * from './subscriptions/index.js';

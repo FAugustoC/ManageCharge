@@ -28,6 +28,7 @@ Thumbs.db
 # Testing
 coverage/
 .nyc_output/
+test-stripe.mjs
 
 # Temporal
 tmp/

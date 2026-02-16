@@ -43,6 +43,72 @@ export interface TenantSettings {
 }
 
 /**
+ * Información del método de pago guardado
+ * 
+ * @description NO almacena datos de tarjeta reales.
+ * Solo referencias al proveedor de pagos (Stripe/CyberSource)
+ */
+export interface PaymentMethodInfo {
+  provider: string; // 'Stripe', 'CyberSource', etc.
+  customerId: string; // ID del customer en el proveedor
+  paymentMethodId: string; // ID del método de pago tokenizado
+  last4: string; // Últimos 4 dígitos
+  brand: string; // visa, mastercard, amex
+  expiryMonth: number;
+  expiryYear: number;
+}
+
+/**
+ * Registro histórico de suscripciones
+ * 
+ * @description Mantiene historial de cambios de plan
+ */
+export interface SubscriptionHistory {
+  plan: string; // 'free', 'premium_monthly', 'premium_annual'
+  startDate: Date;
+  endDate: Date;
+  status: 'completed' | 'cancelled' | 'failed';
+  reason?: string; // Motivo del cambio
+}
+
+/**
+ * Configuración completa de suscripción
+ * 
+ * @description Controla el plan, estado, pagos y renovación
+ */
+export interface SubscriptionConfig {
+  // Plan y estado actual
+  plan: string; // 'free' | 'premium_monthly' | 'premium_annual'
+  status: string; // 'active' | 'grace_period' | 'expired' | 'cancelled'
+
+  // Fechas del periodo actual
+  startDate: Date; // Inicio de la suscripción
+  currentPeriodStart: Date; // Inicio del periodo actual
+  currentPeriodEnd: Date; // Fin del periodo actual
+
+  // Precio y moneda
+  amount: number; // Monto del plan en la moneda local
+  currency: string; // 'USD', 'GTQ', 'MXN', etc.
+
+  // Renovación automática
+  autoRenew: boolean; // ¿Renovar automáticamente?
+  retryAttempts: number; // Intentos de cobro realizados (0-7)
+  maxRetryAttempts: number; // Máximo de reintentos (default: 7)
+  lastRetryDate?: Date; // Último intento de cobro
+  nextRetryDate?: Date; // Próximo intento programado
+
+  // Cancelación
+  cancelledAt?: Date; // Fecha de cancelación
+  cancellationReason?: string; // Motivo de cancelación
+
+  // Método de pago
+  paymentMethod?: PaymentMethodInfo; // Info del método guardado
+
+  // Histórico
+  subscriptionHistory: SubscriptionHistory[]; // Cambios de plan
+}
+
+/**
  * Tenant Entity (Schema de MongoDB)
  * 
  * @description Representa una empresa o freelancer suscrito a ManageCharge.
@@ -61,7 +127,7 @@ export interface TenantSettings {
 export class Tenant {
   /**
    * Nombre del tenant (empresa o persona)
-   * @example "Agencia Digital MX"
+   * @example "Agencia Digital GT"
    */
   @Prop({ required: true, trim: true })
   name: string;
@@ -75,28 +141,28 @@ export class Tenant {
 
   /**
    * Email principal de contacto del tenant
-   * @example "contacto@agenciadigital.mx"
+   * @example "contacto@agenciadigital.com"
    */
   @Prop({ required: true, lowercase: true, trim: true })
   email: string;
 
   /**
    * Teléfono de contacto (opcional)
-   * @example "+52 555 123 4567"
+   * @example "+502 1234 5678"
    */
   @Prop({ trim: true })
   phone?: string;
 
   /**
    * Nombre de la empresa (si es diferente al nombre del tenant)
-   * @example "Agencia Digital MX S.A. de C.V."
+   * @example "Agencia Digital GT S.A."
    */
   @Prop({ trim: true })
   companyName?: string;
 
   /**
    * Sitio web del tenant (opcional)
-   * @example "https://agenciadigital.mx"
+   * @example "https://agenciadigital.com"
    */
   @Prop({ trim: true })
   website?: string;
@@ -123,16 +189,42 @@ export class Tenant {
   /**
    * Configuraciones personalizadas del tenant
    */
-  @Prop({ 
-    type: Object, 
+  @Prop({
+    type: Object,
     default: {
-      currency: 'Q.',
-      timezone: 'America/Guatemala',
-      language: 'es',
+      currency: 'USD',
+      timezone: 'America/California',
+      language: 'en',
       notificationDays: [30, 15, 7, 1],
-    }
+    },
   })
   settings: TenantSettings;
+
+  /**
+   * Configuración de suscripción del tenant
+   * 
+   * @description Controla el plan activo, estado de pago,
+   * método de pago guardado y renovación automática
+   */
+  @Prop({
+    type: Object,
+    default: {
+      plan: 'free',
+      status: 'active',
+      startDate: new Date(),
+      currentPeriodStart: new Date(),
+      currentPeriodEnd: new Date(
+        Date.now() + 365 * 24 * 60 * 60 * 1000,
+      ), // 1 año
+      amount: 0,
+      currency: 'USD',
+      autoRenew: false,
+      retryAttempts: 0,
+      maxRetryAttempts: 7,
+      subscriptionHistory: [],
+    },
+  })
+  subscription: SubscriptionConfig;
 
   /**
    * ¿El tenant está activo?
@@ -176,3 +268,9 @@ export const TenantSchema = SchemaFactory.createForClass(Tenant);
 TenantSchema.index({ email: 1 }); // Búsqueda por email
 TenantSchema.index({ isActive: 1 }); // Filtrar por activos
 TenantSchema.index({ createdAt: -1 }); // Ordenar por fecha (más recientes primero)
+
+// Índices para suscripción (consultas frecuentes en SubscriptionGuard y cron jobs)
+TenantSchema.index({ 'subscription.plan': 1 }); // Filtrar por plan
+TenantSchema.index({ 'subscription.status': 1 }); // Filtrar por status
+TenantSchema.index({ 'subscription.currentPeriodEnd': 1 }); // Para cron jobs
+TenantSchema.index({ 'subscription.autoRenew': 1, 'subscription.currentPeriodEnd': 1 }); // Para renovaciones

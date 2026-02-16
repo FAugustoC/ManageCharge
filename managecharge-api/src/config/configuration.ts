@@ -100,6 +100,21 @@ export const configuration = () => ({
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
     platformFeePercent: parseInt(process.env.PLATFORM_FEE_PERCENT || '5', 10),
   },
+
+    subscriptions: {
+    retryMaxAttempts: parseInt(process.env.SUBSCRIPTION_RETRY_MAX_ATTEMPTS || '7', 10, ),  // Reintentos de cobro
+    gracePeriodDays: parseInt(process.env.SUBSCRIPTION_GRACE_PERIOD_DAYS || '7', 10,), // Días de gracia antes de cancelar
+
+    // Automatización
+    autoChargeEnabled: process.env.SUBSCRIPTION_AUTO_CHARGE_ENABLED !== 'false', // Habilitar cobros automáticos
+    autoDowngradeEnabled: process.env.SUBSCRIPTION_AUTO_DOWNGRADE_ENABLED !== 'false', // Habilitar downgrade automático a FREE después del período de gracia
+
+    // Cron schedule para reintentos
+    // Formato: segundos minutos horas días meses días-semana
+    // Default: Cada 2 horas entre 8am-8pm
+    cronSchedule: process.env.SUBSCRIPTION_RETRY_CRON || '0 */2 8-20 * * *',
+  },
+
 });
 
 export default configuration;
