@@ -35,3 +35,8 @@ temp/
 
 # NestJS
 .nest/
+
+# Database-Dumps
+managecharge-db
+managecharge-db/
+managecharge-dump
