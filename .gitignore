@@ -40,3 +40,7 @@ temp/
 managecharge-db
 managecharge-db/
 managecharge-dump
+
+#DockerCompose
+*.yml
+docker-compose.yml

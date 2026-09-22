@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/github/explore/main/topics/api/api.png" width="120" alt="ManageCharge Logo" />
+  <img src="./docs/assets/managecharge-logo.png" width="500" alt="ManageCharge">
 </p>
 
 <h1 align="center">ManageCharge</h1>

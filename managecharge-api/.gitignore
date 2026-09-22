@@ -35,3 +35,7 @@ temp/
 
 # NestJS
 .nest/
+
+#DockerCompose
+*.yml
+docker-compose.yml
