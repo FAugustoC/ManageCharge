@@ -1,5 +1,10 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
+import type { PaymentMethodInfo } from '../../../common/interfaces/payment-provider.interface.js';
+import {
+  DEFAULT_TIMEZONE,
+  DEFAULT_CURRENCY,
+} from '../../../common/constants/app.constants.js';
 
 /**
  * Interfaz para la dirección del Tenant
@@ -40,22 +45,6 @@ export interface TenantSettings {
   timezone?: string;
   language?: string;
   notificationDays?: number[];
-}
-
-/**
- * Información del método de pago guardado
- * 
- * @description NO almacena datos de tarjeta reales.
- * Solo referencias al proveedor de pagos (Stripe/CyberSource)
- */
-export interface PaymentMethodInfo {
-  provider: string; // 'Stripe', 'CyberSource', etc.
-  customerId: string; // ID del customer en el proveedor
-  paymentMethodId: string; // ID del método de pago tokenizado
-  last4: string; // Últimos 4 dígitos
-  brand: string; // visa, mastercard, amex
-  expiryMonth: number;
-  expiryYear: number;
 }
 
 /**
@@ -101,7 +90,7 @@ export interface SubscriptionConfig {
   cancelledAt?: Date; // Fecha de cancelación
   cancellationReason?: string; // Motivo de cancelación
 
-  // Método de pago
+  // Método de pago (tipo definido en common/interfaces/payment-provider.interface.ts)
   paymentMethod?: PaymentMethodInfo; // Info del método guardado
 
   // Histórico
@@ -188,15 +177,18 @@ export class Tenant {
 
   /**
    * Configuraciones personalizadas del tenant
+   *
+   * @description El default es una FUNCIÓN para que cada tenant
+   * reciba su propio objeto nuevo (ver nota en `subscription`).
    */
   @Prop({
     type: Object,
-    default: {
-      currency: 'USD',
-      timezone: 'America/California',
+    default: (): TenantSettings => ({
+      currency: DEFAULT_CURRENCY,
+      timezone: DEFAULT_TIMEZONE,
       language: 'en',
       notificationDays: [30, 15, 7, 1],
-    },
+    }),
   })
   settings: TenantSettings;
 
@@ -206,22 +198,34 @@ export class Tenant {
    * @description Controla el plan activo, estado de pago,
    * método de pago guardado y renovación automática
    */
+  /**
+   * IMPORTANTE: el default es una FUNCIÓN, no un objeto literal.
+   *
+   * Con un objeto literal, `new Date()` se ejecuta UNA sola vez al
+   * arrancar el servidor, y todos los tenants creados después
+   * heredarían la misma fecha de inicio y de vencimiento.
+   * Con una función, Mongoose la ejecuta cada vez que crea un
+   * documento, así que cada tenant recibe sus propias fechas.
+   */
   @Prop({
     type: Object,
-    default: {
-      plan: 'free',
-      status: 'active',
-      startDate: new Date(),
-      currentPeriodStart: new Date(),
-      currentPeriodEnd: new Date(
-        Date.now() + 365 * 24 * 60 * 60 * 1000,
-      ), // 1 año
-      amount: 0,
-      currency: 'USD',
-      autoRenew: false,
-      retryAttempts: 0,
-      maxRetryAttempts: 7,
-      subscriptionHistory: [],
+    default: (): SubscriptionConfig => {
+      const now = new Date();
+      return {
+        plan: 'free',
+        status: 'active',
+        startDate: now,
+        currentPeriodStart: now,
+        currentPeriodEnd: new Date(
+          now.getTime() + 365 * 24 * 60 * 60 * 1000,
+        ), // 1 año
+        amount: 0,
+        currency: DEFAULT_CURRENCY,
+        autoRenew: false,
+        retryAttempts: 0,
+        maxRetryAttempts: 7,
+        subscriptionHistory: [],
+      };
     },
   })
   subscription: SubscriptionConfig;

@@ -47,7 +47,11 @@ export class CyberSourceProvider implements IPaymentProvider {
     throw new Error('CyberSource provider no implementado');
   }
 
-  async refund(transactionId: string, amount?: number): Promise<void> {
+  async refund(
+    transactionId: string,
+    amount?: number,
+    currency?: string,
+  ): Promise<void> {
     throw new Error('CyberSource provider no implementado');
   }
 }

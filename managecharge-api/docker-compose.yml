@@ -1,6 +1,8 @@
 # Docker Compose para desarrollo de ManageCharge
-
-version: '3.8'
+#
+# Las credenciales NO se escriben aquí: Docker Compose las lee
+# automáticamente del archivo .env que está en esta misma carpeta.
+# Copia .env.example a .env y completa los valores.
 
 services:
   mongodb:
@@ -11,8 +13,8 @@ services:
       - "27017:27017"
     environment:
       # Credenciales del usuario root
-      MONGO_INITDB_ROOT_USERNAME: managecharge_admin
-      MONGO_INITDB_ROOT_PASSWORD: managecharge_secret_2024
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
       MONGO_INITDB_DATABASE: managecharge
     volumes:
       - mongodb_data:/data/db
@@ -28,11 +30,11 @@ services:
     environment:
       ME_CONFIG_MONGODB_SERVER: mongodb
       # Credenciales para conectar a MongoDB
-      ME_CONFIG_MONGODB_ADMINUSERNAME: managecharge_admin
-      ME_CONFIG_MONGODB_ADMINPASSWORD: managecharge_secret_2024
+      ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USERNAME}
+      ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD}
       # Credenciales para acceder a Mongo Express (interfaz web)
-      ME_CONFIG_BASICAUTH_USERNAME: admin
-      ME_CONFIG_BASICAUTH_PASSWORD: admin123
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USERNAME}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD}
     depends_on:
       - mongodb
     networks:

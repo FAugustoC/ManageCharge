@@ -40,8 +40,13 @@ export interface CreatePaymentMethodDto {
 export interface ChargeDto {
   customerId: string;
   paymentMethodId: string;
-  amount: number; // En centavos (ej: 1299 = $12.99)
-  currency: string; // 'USD', 'GTQ', 'MXN', etc.
+  /**
+   * Monto en UNIDADES COMPLETAS de la moneda (ej: 12.99 = $12.99 USD,
+   * 12000 = 12,000 CLP). NO enviar centavos: cada provider se encarga
+   * de convertir a la unidad mínima con toMinorUnits().
+   */
+  amount: number;
+  currency: string; // Código ISO 4217: 'USD', 'GTQ', 'MXN', etc.
   description: string;
   metadata?: Record<string, any>;
 }
@@ -58,15 +63,20 @@ export interface ChargeResult {
 
 /**
  * Información del método de pago guardado
+ *
+ * @description Fuente única de verdad para este tipo. La usan los
+ * providers (lo que devuelven) y la entidad Tenant (lo que se guarda
+ * en MongoDB). NO almacena datos reales de la tarjeta, solo
+ * referencias al proveedor de pagos.
  */
 export interface PaymentMethodInfo {
-  paymentMethodId: string;
+  provider: string; // Valor del enum PaymentProvider: 'stripe', etc.
+  customerId: string; // ID del customer en el proveedor (cus_...)
+  paymentMethodId: string; // ID del método de pago tokenizado (pm_...)
   last4: string; // Últimos 4 dígitos
   brand: string; // 'visa', 'mastercard', 'amex'
   expiryMonth: number;
   expiryYear: number;
-  provider?: string; // 'Stripe', 'CyberSource', etc.
-  customerId?: string; // ID del cliente al que pertenece
 }
 
 /**
@@ -112,7 +122,12 @@ export interface IPaymentProvider {
    * Reembolsar un pago
    * 
    * @param transactionId - ID de la transacción
-   * @param amount - Monto a reembolsar (opcional, null = total)
+   * @param amount - Monto en unidades completas (opcional, sin valor = total)
+   * @param currency - Moneda del pago original (requerida si se envía amount)
    */
-  refund(transactionId: string, amount?: number): Promise<void>;
+  refund(
+    transactionId: string,
+    amount?: number,
+    currency?: string,
+  ): Promise<void>;
 }

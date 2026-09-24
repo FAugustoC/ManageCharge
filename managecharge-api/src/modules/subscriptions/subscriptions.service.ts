@@ -37,8 +37,12 @@ import {
 import {
     SUBSCRIPTION_FEATURES,
     SUBSCRIPTION_RETRY_CONFIG,
+    DEFAULT_TIMEZONE,
     getSubscriptionPrice,
 } from '../../common/constants/index.js';
+
+// Interfaces
+import type { PaymentMethodInfo } from '../../common/interfaces/index.js';
 
 // Providers
 import { StripeProvider } from '../../common/providers/payment/index.js';
@@ -308,7 +312,7 @@ export class SubscriptionsService {
         }
 
         //  Guardar método de pago con try-catch
-        let paymentMethodInfo: any;
+        let paymentMethodInfo: PaymentMethodInfo;
         try {
             paymentMethodInfo = await this.stripeProvider.savePaymentMethod({
                 customerId,
@@ -981,7 +985,7 @@ export class SubscriptionsService {
 
         // Verificar timezone del tenant (8am-8pm)
         const timezone =
-            tenant.settings?.timezone || 'America/Guatemala';
+            tenant.settings?.timezone || DEFAULT_TIMEZONE;
 
         if (!this.isWithinChargingHours(timezone)) {
             this.logger.debug(
@@ -1246,12 +1250,21 @@ export class SubscriptionsService {
             // Permitir cobros entre 8am y 8pm
             return hour >= 8 && hour < 20;
         } catch (error) {
-            // Si el timezone es inválido, usar UTC
-            this.logger.warn(
-                `Timezone inválido: ${timezone}. Usando UTC.`,
+            // Timezone inválido guardado en el tenant: se registra como
+            // ERROR (no warning) porque indica datos corruptos que hay
+            // que corregir. Se usa la zona por defecto en lugar de UTC
+            // para no cobrar de madrugada a clientes de Latinoamérica.
+            this.logger.error(
+                `Timezone inválido: "${timezone}". Usando ${DEFAULT_TIMEZONE}.`,
             );
-            const hour = new Date().getUTCHours();
-            return hour >= 8 && hour < 20;
+
+            if (timezone === DEFAULT_TIMEZONE) {
+                // Evita recursión infinita si la constante fuera inválida
+                const hour = new Date().getUTCHours();
+                return hour >= 8 && hour < 20;
+            }
+
+            return this.isWithinChargingHours(DEFAULT_TIMEZONE);
         }
     }
 

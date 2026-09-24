@@ -19,6 +19,20 @@ export const NOTIFICATION_DAYS = {
   FINAL: 1,
 } as const;
 
+/**
+ * Zona horaria por defecto para tenants nuevos
+ *
+ * @description Debe ser un identificador IANA válido (ej: 'America/Guatemala',
+ * 'America/Mexico_City', 'America/Los_Angeles'). Los nombres inventados como
+ * 'America/California' NO existen y hacen que Intl.DateTimeFormat lance error.
+ *
+ * @see https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+ */
+export const DEFAULT_TIMEZONE = 'America/Guatemala';
+
+/** Moneda por defecto para tenants nuevos (código ISO 4217) */
+export const DEFAULT_CURRENCY = 'USD';
+
 /** Porcentaje de comisión de ManageCharge */
 export const PLATFORM_FEE_PERCENT = 5;
 

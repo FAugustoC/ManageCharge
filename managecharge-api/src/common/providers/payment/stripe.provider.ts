@@ -9,6 +9,8 @@ import {
   ChargeResult,
   PaymentMethodInfo,
 } from '../../interfaces/payment-provider.interface.js';
+import { PaymentProvider } from '../../enums/payment-provider.enum.js';
+import { toMinorUnits } from '../../constants/currency.constants.js';
 
 /**
  * Implementación del proveedor de pagos Stripe
@@ -136,7 +138,7 @@ export class StripeProvider implements IPaymentProvider {
       const card = paymentMethod.card;
 
       return {
-        provider: 'stripe',
+        provider: PaymentProvider.STRIPE,
         customerId: data.customerId,
         paymentMethodId: paymentMethod.id,
         last4: card?.last4 || '0000',
@@ -175,8 +177,11 @@ export class StripeProvider implements IPaymentProvider {
       );
 
       // Crear PaymentIntent
+      // data.amount viene en unidades completas (ej: 12.99 USD).
+      // Stripe lo necesita en la unidad mínima de la moneda:
+      // 12.99 USD -> 1299 centavos, pero 12000 CLP -> 12000 (sin decimales).
       const paymentIntent = await this.stripe.paymentIntents.create({
-        amount: Math.round(data.amount * 100), // Convertir a centavos
+        amount: toMinorUnits(data.amount, data.currency),
         currency: data.currency.toLowerCase(),
         customer: data.customerId,
         payment_method: data.paymentMethodId,
@@ -252,9 +257,22 @@ export class StripeProvider implements IPaymentProvider {
    * Reembolsar pago
    *
    * @param transactionId - ID del PaymentIntent
-   * @param amount - Monto a reembolsar (opcional, null = total)
+   * @param amount - Monto en unidades completas (opcional, sin valor = total)
+   * @param currency - Moneda del pago original (requerida si se envía amount)
    */
-  async refund(transactionId: string, amount?: number): Promise<void> {
+  async refund(
+    transactionId: string,
+    amount?: number,
+    currency?: string,
+  ): Promise<void> {
+    // Un reembolso parcial necesita la moneda para convertir correctamente
+    // a la unidad mínima. Sin ella podríamos reembolsar 100 veces más.
+    if (amount !== undefined && !currency) {
+      throw new Error(
+        'Se requiere la moneda para procesar un reembolso parcial',
+      );
+    }
+
     try {
       this.logger.log(
         `Procesando reembolso para transacción: ${transactionId}`,
@@ -264,8 +282,8 @@ export class StripeProvider implements IPaymentProvider {
         payment_intent: transactionId,
       };
 
-      if (amount) {
-        refundData.amount = Math.round(amount * 100);
+      if (amount !== undefined && currency) {
+        refundData.amount = toMinorUnits(amount, currency);
       }
 
       const refund = await this.stripe.refunds.create(refundData);
