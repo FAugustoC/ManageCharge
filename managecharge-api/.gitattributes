@@ -1,0 +1,13 @@
+# Normaliza finales de línea: el repositorio siempre guarda LF,
+# sin importar si se trabaja desde Windows, macOS o Linux.
+* text=auto eol=lf
+
+# Archivos binarios: Git no debe intentar convertirlos
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

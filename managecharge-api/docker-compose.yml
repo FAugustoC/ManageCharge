@@ -12,9 +12,8 @@ services:
     ports:
       - "27017:27017"
     environment:
-      # Credenciales del usuario root
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:?Define MONGO_ROOT_USERNAME en .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Define MONGO_ROOT_PASSWORD en .env}
       MONGO_INITDB_DATABASE: managecharge
     volumes:
       - mongodb_data:/data/db
@@ -29,12 +28,10 @@ services:
       - "8081:8081"
     environment:
       ME_CONFIG_MONGODB_SERVER: mongodb
-      # Credenciales para conectar a MongoDB
       ME_CONFIG_MONGODB_ADMINUSERNAME: ${MONGO_ROOT_USERNAME}
       ME_CONFIG_MONGODB_ADMINPASSWORD: ${MONGO_ROOT_PASSWORD}
-      # Credenciales para acceder a Mongo Express (interfaz web)
-      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USERNAME}
-      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD}
+      ME_CONFIG_BASICAUTH_USERNAME: ${MONGO_EXPRESS_USERNAME:?Define MONGO_EXPRESS_USERNAME en .env}
+      ME_CONFIG_BASICAUTH_PASSWORD: ${MONGO_EXPRESS_PASSWORD:?Define MONGO_EXPRESS_PASSWORD en .env}
     depends_on:
       - mongodb
     networks:

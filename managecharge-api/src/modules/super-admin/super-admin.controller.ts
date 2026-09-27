@@ -242,7 +242,7 @@ export class SuperAdminController {
     description: 'Super Admin creado exitosamente',
   })
   @ApiResponse({
-    status: 400,
+    status: 409,
     description: 'Email ya registrado',
   })
   async createSuperAdmin(@Body() createDto: CreateSuperAdminDto) {

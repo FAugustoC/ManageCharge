@@ -36,6 +36,5 @@ temp/
 # NestJS
 .nest/
 
-#DockerCompose
-*.yml
-docker-compose.yml
+# Docker Compose local: overrides personales que no se comparten
+docker-compose.override.yml

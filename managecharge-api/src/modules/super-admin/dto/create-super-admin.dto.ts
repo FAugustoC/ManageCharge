@@ -1,20 +1,40 @@
-import { IsEmail, IsString, MinLength, IsOptional } from 'class-validator';
+import {
+  IsEmail,
+  IsString,
+  MinLength,
+  MaxLength,
+  Matches,
+} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { PASSWORD_CONFIG } from '../../../common/constants/app.constants.js';
 
 /**
  * DTO para crear un nuevo usuario Super Admin
- * 
- * @description Permite al super admin principal (August) crear
- * usuarios secundarios con rol de super admin para su equipo de soporte.
+ *
+ * @description Permite a un super admin crear otros usuarios con rol
+ * de super admin para el equipo de soporte de ManageCharge.
+ *
+ * Los campos coinciden con la entidad User (firstName / lastName),
+ * que es donde finalmente se guardan.
  */
 export class CreateSuperAdminDto {
   @ApiProperty({
-    description: 'Nombre completo del nuevo super admin',
-    example: 'María García',
+    description: 'Nombre del nuevo super admin',
+    example: 'María',
   })
-  @IsString()
+  @IsString({ message: 'El nombre debe ser texto' })
   @MinLength(2, { message: 'El nombre debe tener al menos 2 caracteres' })
-  name: string;
+  @MaxLength(50, { message: 'El nombre no puede exceder 50 caracteres' })
+  firstName: string;
+
+  @ApiProperty({
+    description: 'Apellido del nuevo super admin',
+    example: 'García',
+  })
+  @IsString({ message: 'El apellido debe ser texto' })
+  @MinLength(2, { message: 'El apellido debe tener al menos 2 caracteres' })
+  @MaxLength(50, { message: 'El apellido no puede exceder 50 caracteres' })
+  lastName: string;
 
   @ApiProperty({
     description: 'Email del nuevo super admin',
@@ -24,19 +44,17 @@ export class CreateSuperAdminDto {
   email: string;
 
   @ApiProperty({
-    description: 'Contraseña temporal (el usuario deberá cambiarla)',
-    example: 'TempPass123!',
+    description:
+      'Contraseña temporal (mínimo 8 caracteres, una mayúscula, una minúscula y un número)',
+    example: 'TempPass123',
   })
-  @IsString()
-  @MinLength(8, { message: 'La contraseña debe tener al menos 8 caracteres' })
+  @IsString({ message: 'La contraseña debe ser texto' })
+  @MinLength(PASSWORD_CONFIG.MIN_LENGTH, {
+    message: `La contraseña debe tener al menos ${PASSWORD_CONFIG.MIN_LENGTH} caracteres`,
+  })
+  @MaxLength(100, { message: 'La contraseña no puede exceder 100 caracteres' })
+  @Matches(PASSWORD_CONFIG.PATTERN, {
+    message: PASSWORD_CONFIG.PATTERN_MESSAGE,
+  })
   password: string;
-
-  @ApiProperty({
-    description: 'Rol o cargo del nuevo super admin',
-    example: 'Soporte Técnico',
-    required: false,
-  })
-  @IsOptional()
-  @IsString()
-  role?: string;
 }

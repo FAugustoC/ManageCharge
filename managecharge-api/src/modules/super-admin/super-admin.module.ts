@@ -5,7 +5,7 @@ import { SuperAdminService } from './super-admin.service.js';
 
 // ✅ Usar barrel exports
 import { Tenant, TenantSchema } from '../tenants/index.js';
-import { User, UserSchema } from '../users/index.js';
+import { User, UserSchema, UsersModule } from '../users/index.js';
 import { Client, ClientSchema } from '../clients/index.js';
 import { Service, ServiceSchema } from '../services/index.js';
 import { Payment, PaymentSchema } from '../payments/index.js';
@@ -20,6 +20,8 @@ import { Payment, PaymentSchema } from '../payments/index.js';
  */
 @Module({
   imports: [
+    // UsersModule exporta UsersService, que se usa para crear super admins
+    UsersModule,
     MongooseModule.forFeature([
       { name: Tenant.name, schema: TenantSchema },
       { name: User.name, schema: UserSchema },

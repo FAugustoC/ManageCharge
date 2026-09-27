@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { User, UserSchema } from './entities/index.js';
+import { Tenant, TenantSchema } from '../tenants/entities/index.js';
 import { UsersService } from './users.service.js';
 import { UsersController } from './users.controller.js';
 
@@ -24,6 +25,11 @@ import { UsersController } from './users.controller.js';
       {
         name: User.name,
         schema: UserSchema,
+      },
+      {
+        // Solo lectura: para validar que un tenantId exista
+        name: Tenant.name,
+        schema: TenantSchema,
       },
     ]),
   ],

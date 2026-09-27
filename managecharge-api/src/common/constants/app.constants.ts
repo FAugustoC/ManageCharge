@@ -47,6 +47,10 @@ export const PAGINATION = {
 export const PASSWORD_CONFIG = {
   MIN_LENGTH: 8,
   SALT_ROUNDS: 10,
+  /** Al menos una minúscula, una mayúscula y un número */
+  PATTERN: /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/,
+  PATTERN_MESSAGE:
+    'La contraseña debe tener al menos una mayúscula, una minúscula y un número',
 } as const;
 
 

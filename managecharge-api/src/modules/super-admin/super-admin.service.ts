@@ -1,14 +1,13 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import * as bcrypt from 'bcrypt';
 
 import { Tenant } from '../tenants/index.js';
-import { User } from '../users/index.js';
+import { User, UsersService } from '../users/index.js';
 import { Client } from '../clients/index.js';
 import { Service } from '../services/index.js';
 import { Payment } from '../payments/index.js';
-import { UserRole } from '../../common/enums/role.enum.js';
+import { UserRole, AuthProvider } from '../../common/enums/index.js';
 import { CreateSuperAdminDto, ExportDataDto, ExportType } from './dto/index.js';
 
 @Injectable()
@@ -19,6 +18,7 @@ export class SuperAdminService {
     @InjectModel(Client.name) private clientModel: Model<Client>,
     @InjectModel(Service.name) private serviceModel: Model<Service>,
     @InjectModel(Payment.name) private paymentModel: Model<Payment>,
+    private readonly usersService: UsersService,
   ) {}
 
   async getDashboardStats() {
@@ -351,27 +351,20 @@ export class SuperAdminService {
   }
 
   async createSuperAdmin(createDto: CreateSuperAdminDto) {
-    const existingUser = await this.userModel.findOne({
+    // Se reutiliza UsersService.create() en lugar de escribir directo
+    // en el modelo. Así el super admin pasa por las mismas reglas que
+    // cualquier usuario: email en minúsculas, validación de duplicados
+    // (409 Conflict), hash de contraseña con la configuración global
+    // y respuesta sin el campo password.
+    const superAdmin = await this.usersService.create({
+      firstName: createDto.firstName,
+      lastName: createDto.lastName,
       email: createDto.email,
-    });
-
-    if (existingUser) {
-      throw new Error('El email ya está registrado');
-    }
-
-    const hashedPassword = await bcrypt.hash(createDto.password, 10);
-
-    const superAdmin = new this.userModel({
-      name: createDto.name,
-      email: createDto.email,
-      password: hashedPassword,
+      password: createDto.password,
       role: UserRole.SUPER_ADMIN,
-      tenantId: null,
+      authProvider: AuthProvider.LOCAL,
     });
 
-    await superAdmin.save();
-
-    const { password, ...result } = superAdmin.toObject();
-    return result;
+    return superAdmin;
   }
 }

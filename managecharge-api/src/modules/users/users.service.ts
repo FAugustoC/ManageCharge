@@ -8,6 +8,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 import { User, UserDocument } from './entities/index.js';
+import { Tenant, TenantDocument } from '../tenants/entities/index.js';
 import { CreateUserDto, UpdateUserDto } from './dto/index.js';
 import { UserRole, AuthProvider, PASSWORD_CONFIG } from '../../common/index.js';
 
@@ -27,7 +28,22 @@ import { UserRole, AuthProvider, PASSWORD_CONFIG } from '../../common/index.js';
 export class UsersService {
     constructor(
         @InjectModel(User.name) private userModel: Model<UserDocument>,
+        @InjectModel(Tenant.name) private tenantModel: Model<TenantDocument>,
     ) { }
+
+    /**
+     * Verificar si existe un Tenant
+     *
+     * @description Evita crear usuarios "huérfanos" asignados a un
+     * tenantId que no existe en la base de datos.
+     */
+    async tenantExists(tenantId: string): Promise<boolean> {
+        if (!Types.ObjectId.isValid(tenantId)) {
+            return false;
+        }
+        const exists = await this.tenantModel.exists({ _id: tenantId });
+        return exists !== null;
+    }
 
     /**
      * Hashear una contraseña
