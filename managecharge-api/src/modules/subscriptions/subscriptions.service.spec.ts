@@ -12,15 +12,15 @@ import {
  * @description MongoDB y Stripe se reemplazan por objetos falsos para
  * verificar que el servicio APLICA correctamente las reglas de negocio:
  * - Un período nuevo empieza al vencer el anterior (sin días gratis)
- * - El cron cobra solo una vez por día local y dentro de 8am-8pm
+ * - El cron cobra solo en los días del calendario, en horario 8am-8pm local
  * - El downgrade se decide por días de gracia transcurridos
  *
  * Ejecutar: npm test -- subscriptions.service
  */
 
 const DAY = 24 * 60 * 60 * 1000;
-const GRACE_DAYS = 7;
-const MAX_ATTEMPTS = 7;
+const GRACE_DAYS = 15;
+const RETRY_SCHEDULE = [1, 2, 4, 6, 9, 12, 15];
 
 /** Crea un tenant falso con suscripción premium mensual */
 function makeTenant(subscription: Record<string, unknown>) {
@@ -86,7 +86,8 @@ describe('SubscriptionsService - reglas de facturación', () => {
     };
 
     const config: Record<string, unknown> = {
-      'subscriptions.retryMaxAttempts': MAX_ATTEMPTS,
+      'subscriptions.retryMaxAttempts': RETRY_SCHEDULE.length,
+      'subscriptions.retryScheduleDays': RETRY_SCHEDULE,
       'subscriptions.gracePeriodDays': GRACE_DAYS,
     };
     const configService = {
@@ -195,8 +196,25 @@ describe('SubscriptionsService - reglas de facturación', () => {
       expect(stripeProvider.charge).not.toHaveBeenCalled();
     });
 
-    it('en un nuevo día y en horario, cobra y renueva desde el vencimiento', async () => {
+    it('no cobra en un día que no está en el calendario', async () => {
+      // Día 3 de gracia: después del intento 2 (día 2), el siguiente es el día 4
       jest.useFakeTimers().setSystemTime(new Date('2026-03-03T15:00:00Z')); // 9am GT
+      findResults.push([
+        makeTenant({
+          status: SubscriptionStatus.GRACE_PERIOD,
+          retryAttempts: 2,
+          lastRetryDate: new Date('2026-03-02T16:00:00Z'),
+          currentPeriodEnd: new Date('2026-03-01T15:00:00Z'),
+        }),
+      ]);
+
+      await service.processRenewalAttempts();
+
+      expect(stripeProvider.charge).not.toHaveBeenCalled();
+    });
+
+    it('en el día programado y en horario, cobra y renueva desde el vencimiento', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-03-04T15:00:00Z')); // día 4, 9am GT
       const oldEnd = new Date('2026-03-01T15:00:00Z');
       findResults.push([
         makeTenant({
@@ -220,7 +238,7 @@ describe('SubscriptionsService - reglas de facturación', () => {
     });
 
     it('la consulta excluye a quienes ya agotaron los días de gracia', async () => {
-      const now = new Date('2026-03-10T15:00:00Z');
+      const now = new Date('2026-03-17T15:00:00Z');
       jest.useFakeTimers().setSystemTime(now);
 
       await service.processRenewalAttempts();
@@ -235,10 +253,10 @@ describe('SubscriptionsService - reglas de facturación', () => {
   // ------------------------------------------------------------
   describe('downgradeExpiredSubscriptions()', () => {
     it('el downgrade se decide por días de gracia, no por número de rechazos', async () => {
-      const now = new Date('2026-03-10T15:00:00Z');
+      const now = new Date('2026-03-17T15:00:00Z');
       jest.useFakeTimers().setSystemTime(now);
 
-      // Un tenant que solo tuvo 3 rechazos, pero ya pasaron sus 7 días
+      // Un tenant que solo tuvo 3 rechazos, pero ya pasaron sus 15 días
       const expired = makeTenant({
         status: SubscriptionStatus.GRACE_PERIOD,
         retryAttempts: 3,

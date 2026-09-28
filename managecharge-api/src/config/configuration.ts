@@ -81,6 +81,92 @@ function readNumber(
   return value;
 }
 
+/** Calendario de reintentos por defecto (días de gracia en que se cobra) */
+const DEFAULT_RETRY_SCHEDULE_DAYS = [1, 2, 4, 6, 9, 12, 15];
+
+/** Días de gracia por defecto */
+const DEFAULT_GRACE_PERIOD_DAYS = 15;
+
+/**
+ * Leer y validar la configuración de reintentos de cobro
+ *
+ * @description El calendario (SUBSCRIPTION_RETRY_SCHEDULE_DAYS) indica en
+ * qué día del período de gracia se hace cada intento. Ejemplo:
+ * "1,2,4,6,9,12,15" = 7 intentos, el primero el día del vencimiento y el
+ * último el día 15.
+ *
+ * El número máximo de intentos NO se configura por separado: es la
+ * cantidad de días del calendario. Así es imposible que el calendario
+ * diga 7 intentos y otra variable diga 5 (una sola fuente de verdad).
+ *
+ * Reglas que se validan al arrancar (si fallan, el API no inicia):
+ * - Solo números enteros, separados por comas
+ * - Cada día entre 1 y los días de gracia
+ * - En orden ascendente y sin repetir (un intento por día como máximo)
+ */
+function readRetryConfig() {
+  const gracePeriodDays = readNumber(
+    'SUBSCRIPTION_GRACE_PERIOD_DAYS',
+    DEFAULT_GRACE_PERIOD_DAYS,
+    { min: 1, max: 60, integer: true },
+  );
+
+  const raw = process.env.SUBSCRIPTION_RETRY_SCHEDULE_DAYS;
+  let retryScheduleDays = DEFAULT_RETRY_SCHEDULE_DAYS;
+
+  if (raw !== undefined && raw.trim() !== '') {
+    const parts = raw.split(',').map((part) => part.trim());
+    const days = parts.map(Number);
+
+    const invalid = (reason: string) =>
+      new Error(
+        `Variable de entorno inválida: SUBSCRIPTION_RETRY_SCHEDULE_DAYS="${raw}". ${reason}`,
+      );
+
+    if (parts.some((part) => part === '') || days.some((d) => !Number.isInteger(d))) {
+      throw invalid('Debe ser una lista de números enteros separados por comas (ej: 1,2,4,6,9,12,15).');
+    }
+
+    if (days.some((d) => d < 1 || d > gracePeriodDays)) {
+      throw invalid(
+        `Cada día debe estar entre 1 y ${gracePeriodDays} (SUBSCRIPTION_GRACE_PERIOD_DAYS).`,
+      );
+    }
+
+    if (days.some((d, i) => i > 0 && d <= days[i - 1])) {
+      throw invalid('Los días deben ir en orden ascendente y sin repetirse.');
+    }
+
+    retryScheduleDays = days;
+  } else if (
+    DEFAULT_RETRY_SCHEDULE_DAYS[DEFAULT_RETRY_SCHEDULE_DAYS.length - 1] >
+    gracePeriodDays
+  ) {
+    // Sin calendario propio pero con una gracia más corta que el
+    // calendario por defecto: se exige definirlo para no adivinar.
+    throw new Error(
+      `SUBSCRIPTION_GRACE_PERIOD_DAYS=${gracePeriodDays} es menor que el calendario ` +
+      `por defecto (${DEFAULT_RETRY_SCHEDULE_DAYS.join(',')}). ` +
+      'Define SUBSCRIPTION_RETRY_SCHEDULE_DAYS con días dentro de la gracia.',
+    );
+  }
+
+  // Variable antigua: ya no se usa, se avisa para evitar confusiones
+  if (process.env.SUBSCRIPTION_RETRY_MAX_ATTEMPTS !== undefined) {
+    console.warn(
+      '[Config] SUBSCRIPTION_RETRY_MAX_ATTEMPTS ya no se usa y será ignorada. ' +
+      'El número de intentos es la cantidad de días en SUBSCRIPTION_RETRY_SCHEDULE_DAYS ' +
+      `(actualmente ${retryScheduleDays.length}). Puedes borrarla de tu .env.`,
+    );
+  }
+
+  return {
+    gracePeriodDays,
+    retryScheduleDays,
+    retryMaxAttempts: retryScheduleDays.length,
+  };
+}
+
 /**
  * Configuración centralizada de la aplicación
  * 
@@ -160,17 +246,9 @@ export const configuration = () => ({
   },
 
   subscriptions: {
-    // Fuente única de verdad para los reintentos de cobro
-    retryMaxAttempts: readNumber('SUBSCRIPTION_RETRY_MAX_ATTEMPTS', 7, {
-      min: 1,
-      max: 30,
-      integer: true,
-    }),
-    gracePeriodDays: readNumber('SUBSCRIPTION_GRACE_PERIOD_DAYS', 7, {
-      min: 1,
-      max: 30,
-      integer: true,
-    }),
+    // Días de gracia, calendario de reintentos y máximo de intentos
+    // (este último se deriva del calendario). Ver readRetryConfig().
+    ...readRetryConfig(),
 
     // Habilitar/deshabilitar automatización
     autoChargeEnabled: process.env.SUBSCRIPTION_AUTO_CHARGE_ENABLED === 'true',
@@ -178,8 +256,8 @@ export const configuration = () => ({
 
     // Cron de renovaciones. Por defecto: cada hora, en punto.
     // No se limita a un rango de horas UTC: cada tenant se evalúa con
-    // su propio horario local (8am-8pm), y la regla de un intento por
-    // día evita cobros repetidos aunque el cron corra muchas veces.
+    // su propio horario local (8am-8pm), y la regla de máximo un intento
+    // por día evita cobros repetidos aunque el cron corra muchas veces.
     cronSchedule: process.env.SUBSCRIPTION_RETRY_CRON || '0 0 * * * *',
   },
 

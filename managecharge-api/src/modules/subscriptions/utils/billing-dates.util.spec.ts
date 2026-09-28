@@ -3,6 +3,7 @@ import {
   addMonthsWithAnchor,
   calculatePeriodEnd,
   evaluateRenewalAttempt,
+  getGraceDayNumber,
   getGracePeriodEnd,
   getLocalDateKey,
   isGracePeriodExpired,
@@ -152,15 +153,65 @@ describe('Utilidades de fechas de facturación', () => {
   });
 
   // ------------------------------------------------------------
-  describe('Decisión de reintento (un cobro por día)', () => {
+  describe('Día de gracia (calendario local)', () => {
+    const periodEnd = utc('2026-03-02T03:00:00Z'); // 9pm GT del 1 de marzo
+
+    it('el día del vencimiento es el día 1', () => {
+      expect(getGraceDayNumber(utc('2026-03-02T05:00:00Z'), periodEnd, GT)).toBe(1); // 11pm GT
+    });
+
+    it('cuenta días calendario locales, no bloques de 24 horas', () => {
+      // Solo 12 horas después, pero ya es el día siguiente en Guatemala
+      expect(getGraceDayNumber(utc('2026-03-02T15:00:00Z'), periodEnd, GT)).toBe(2);
+    });
+
+    it('el día 15 cae 14 días calendario después del vencimiento', () => {
+      expect(getGraceDayNumber(utc('2026-03-15T15:00:00Z'), periodEnd, GT)).toBe(15);
+    });
+  });
+
+  // ------------------------------------------------------------
+  describe('Calendario de reintentos', () => {
+    const SCHEDULE = [1, 2, 4, 6, 9, 12, 15];
     const base = {
-      periodEnd: utc('2026-03-01T15:00:00Z'), // 9:00am Guatemala
+      periodEnd: utc('2026-03-01T15:00:00Z'), // 9:00am GT del 1 de marzo
       lastRetryDate: null as Date | null,
       retryAttempts: 0,
-      maxAttempts: 7,
-      graceDays: 7,
+      retryScheduleDays: SCHEDULE,
+      graceDays: 15,
       timeZone: GT,
     };
+
+    /**
+     * Simula el cron ejecutándose cada hora desde el vencimiento hasta
+     * 16 días después, con TODOS los cobros rechazados. Devuelve los
+     * días de gracia en que ocurrió cada intento.
+     */
+    function simulate(periodEnd: Date, schedule = SCHEDULE, graceDays = 15) {
+      let retryAttempts = 0;
+      let lastRetryDate: Date | null = null;
+      const attemptDays: number[] = [];
+
+      for (let hour = 0; hour <= (graceDays + 1) * 24; hour++) {
+        const now = new Date(periodEnd.getTime() + hour * 60 * 60 * 1000);
+        const decision = evaluateRenewalAttempt({
+          ...base,
+          periodEnd,
+          retryScheduleDays: schedule,
+          graceDays,
+          now,
+          retryAttempts,
+          lastRetryDate,
+        });
+
+        if (decision.shouldCharge) {
+          retryAttempts++;
+          lastRetryDate = now;
+          attemptDays.push(getGraceDayNumber(now, periodEnd, GT));
+        }
+      }
+      return attemptDays;
+    }
 
     it('no cobra antes del vencimiento', () => {
       const r = evaluateRenewalAttempt({ ...base, now: utc('2026-03-01T14:00:00Z') });
@@ -172,42 +223,54 @@ describe('Utilidades de fechas de facturación', () => {
       expect(r).toEqual({ shouldCharge: true, reason: 'due' });
     });
 
-    it('no cobra dos veces el mismo día local', () => {
+    it('no cobra el día 3 porque el intento 3 está programado para el día 4', () => {
       const r = evaluateRenewalAttempt({
         ...base,
-        retryAttempts: 1,
-        lastRetryDate: utc('2026-03-01T16:00:00Z'), // 10am GT
-        now: utc('2026-03-02T01:00:00Z'), // 7pm GT, mismo día (aunque en UTC ya es día 2)
+        retryAttempts: 2,
+        lastRetryDate: utc('2026-03-02T15:00:00Z'), // día 2
+        now: utc('2026-03-03T15:00:00Z'), // día 3, 9am GT
       });
-      expect(r.reason).toBe('already_attempted_today');
+      expect(r.reason).toBe('not_scheduled_today');
     });
 
-    it('cobra al día siguiente a partir de las 8am local', () => {
-      const lastRetryDate = utc('2026-03-01T16:00:00Z');
-
+    it('cobra el día 4 a partir de las 8am local', () => {
+      const lastRetryDate = utc('2026-03-02T15:00:00Z');
       const early = evaluateRenewalAttempt({
         ...base,
-        retryAttempts: 1,
+        retryAttempts: 2,
         lastRetryDate,
-        now: utc('2026-03-02T12:00:00Z'), // 6am GT
+        now: utc('2026-03-04T13:00:00Z'), // 7am GT
       });
       expect(early.reason).toBe('outside_charging_hours');
 
       const onTime = evaluateRenewalAttempt({
         ...base,
-        retryAttempts: 1,
+        retryAttempts: 2,
         lastRetryDate,
-        now: utc('2026-03-02T14:00:00Z'), // 8am GT
+        now: utc('2026-03-04T14:00:00Z'), // 8am GT
       });
       expect(onTime.shouldCharge).toBe(true);
     });
 
-    it('no cobra después de agotar los intentos', () => {
+    it('no cobra dos veces el mismo día, aunque esté reponiendo un intento', () => {
+      // Vence a las 10pm GT del 1 de marzo: el intento 1 se repuso el día 2
+      // a las 9am, y el intento 2 también está programado para el día 2.
+      // Aun así, debe esperar al día siguiente.
+      const r = evaluateRenewalAttempt({
+        ...base,
+        periodEnd: utc('2026-03-02T04:00:00Z'),
+        retryAttempts: 1,
+        lastRetryDate: utc('2026-03-02T15:00:00Z'), // 9am GT, día 2
+        now: utc('2026-03-03T01:00:00Z'), // 7pm GT, mismo día 2
+      });
+      expect(r.reason).toBe('already_attempted_today');
+    });
+
+    it('no cobra después de completar el calendario', () => {
       const r = evaluateRenewalAttempt({
         ...base,
         retryAttempts: 7,
-        lastRetryDate: utc('2026-03-07T16:00:00Z'),
-        now: utc('2026-03-08T14:30:00Z'),
+        now: utc('2026-03-15T20:00:00Z'),
       });
       expect(r.reason).toBe('max_attempts_reached');
     });
@@ -216,61 +279,23 @@ describe('Utilidades de fechas de facturación', () => {
       const r = evaluateRenewalAttempt({
         ...base,
         retryAttempts: 3,
-        now: utc('2026-03-08T15:00:00Z'),
+        now: utc('2026-03-16T15:00:00Z'), // 15 días exactos
       });
       expect(r.reason).toBe('grace_period_expired');
     });
 
-    it('simulación completa: exactamente 7 intentos en 7 días, uno por día', () => {
-      // El cron corre cada hora durante 8 días; contamos cuántos cobros ocurren
-      let retryAttempts = 0;
-      let lastRetryDate: Date | null = null;
-      const attemptDays: string[] = [];
-
-      const start = base.periodEnd.getTime();
-      for (let hour = 0; hour <= 8 * 24; hour++) {
-        const now = new Date(start + hour * 60 * 60 * 1000);
-        const decision = evaluateRenewalAttempt({
-          ...base,
-          now,
-          retryAttempts,
-          lastRetryDate,
-        });
-
-        if (decision.shouldCharge) {
-          retryAttempts++; // el cobro es rechazado
-          lastRetryDate = now;
-          attemptDays.push(getLocalDateKey(now, GT));
-        }
-      }
-
-      expect(retryAttempts).toBe(7);
-      expect(new Set(attemptDays).size).toBe(7); // 7 días distintos
-      expect(attemptDays[0]).toBe('2026-03-01');
-      expect(attemptDays[6]).toBe('2026-03-07');
+    it('simulación: los 7 intentos ocurren exactamente en los días del calendario', () => {
+      expect(simulate(base.periodEnd)).toEqual([1, 2, 4, 6, 9, 12, 15]);
     });
 
-    it('si vence de noche, los 7 intentos igual caben dentro de la gracia', () => {
-      let retryAttempts = 0;
-      let lastRetryDate: Date | null = null;
-      const periodEnd = utc('2026-03-02T04:00:00Z'); // 10pm GT del 1 de marzo
+    it('si vence de noche, el intento 1 se repone al día siguiente sin perder ninguno', () => {
+      // 10pm GT: el día 1 ya no tiene horario de cobro
+      const attempts = simulate(utc('2026-03-02T04:00:00Z'));
+      expect(attempts).toEqual([2, 3, 4, 6, 9, 12, 15]);
+    });
 
-      for (let hour = 0; hour <= 8 * 24; hour++) {
-        const now = new Date(periodEnd.getTime() + hour * 60 * 60 * 1000);
-        const decision = evaluateRenewalAttempt({
-          ...base,
-          periodEnd,
-          now,
-          retryAttempts,
-          lastRetryDate,
-        });
-        if (decision.shouldCharge) {
-          retryAttempts++;
-          lastRetryDate = now;
-        }
-      }
-
-      expect(retryAttempts).toBe(7);
+    it('funciona con otros calendarios configurados', () => {
+      expect(simulate(base.periodEnd, [1, 3, 7], 7)).toEqual([1, 3, 7]);
     });
   });
 });

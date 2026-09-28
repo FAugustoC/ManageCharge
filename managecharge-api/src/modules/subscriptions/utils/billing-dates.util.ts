@@ -13,9 +13,10 @@
  *    termina el anterior, nunca en la fecha del pago. Si un tenant paga
  *    el día 6 de su período de gracia, no gana 6 días gratis.
  *
- * 2. UN INTENTO POR DÍA: durante el período de gracia se intenta cobrar
- *    como máximo una vez por día calendario, según la zona horaria del
- *    tenant, y solo entre las 8am y las 8pm de su hora local.
+ * 2. CALENDARIO DE REINTENTOS: durante el período de gracia se intenta
+ *    cobrar en días específicos (ej: días 1, 2, 4, 6, 9, 12 y 15), según
+ *    el calendario local del tenant y solo entre 8am y 8pm de su hora.
+ *    Nunca más de un intento por día.
  *
  * 3. DOWNGRADE POR DÍAS: el downgrade ocurre cuando transcurren los días
  *    de gracia completos desde el vencimiento, no al contar rechazos.
@@ -90,6 +91,35 @@ export function getLocalDateKey(date: Date, timeZone: string): string {
 export function isWithinChargingHours(now: Date, timeZone: string): boolean {
   const hour = getLocalHour(now, timeZone);
   return hour >= CHARGING_HOURS.START && hour < CHARGING_HOURS.END;
+}
+
+/**
+ * Número de día del período de gracia (1 = día del vencimiento)
+ *
+ * @description Cuenta días CALENDARIO en la zona horaria del tenant,
+ * no bloques de 24 horas. Si el período vence el lunes a las 9pm en
+ * Guatemala, el lunes es el día 1 y el martes es el día 2, aunque solo
+ * hayan pasado unas horas.
+ *
+ * Se comparan fechas 'YYYY-MM-DD' convertidas a medianoche UTC, así
+ * que los cambios de horario de verano de otros países no afectan
+ * el conteo.
+ *
+ * @example
+ * // Vence el 1 de marzo; hoy es 4 de marzo (hora local)
+ * getGraceDayNumber(hoy, vencimiento, tz) // 4
+ */
+export function getGraceDayNumber(
+  now: Date,
+  periodEnd: Date,
+  timeZone: string,
+): number {
+  const toUtcMidnight = (key: string) => Date.parse(`${key}T00:00:00Z`);
+
+  const today = toUtcMidnight(getLocalDateKey(now, timeZone));
+  const dueDay = toUtcMidnight(getLocalDateKey(periodEnd, timeZone));
+
+  return Math.round((today - dueDay) / MS_PER_DAY) + 1;
 }
 
 // ============================================================
@@ -224,6 +254,7 @@ export type RetryDecisionReason =
   | 'not_due_yet'
   | 'grace_period_expired'
   | 'max_attempts_reached'
+  | 'not_scheduled_today'
   | 'outside_charging_hours'
   | 'already_attempted_today';
 
@@ -236,20 +267,26 @@ export interface RetryDecision {
  * ¿Toca intentar cobrar la renovación en este momento?
  *
  * @description Aplica todas las reglas en orden. El cron corre varias
- * veces al día (cada 1-2 horas), pero esta función garantiza que cada
- * tenant reciba como máximo UN intento por día local.
+ * veces al día (cada hora), pero esta función decide si a ESTE tenant
+ * le toca un intento AHORA.
  *
- * Con 7 días de gracia y 7 intentos:
- * - Día 1 (vencimiento): intento 1 dentro de 8am-8pm
- * - Días 2 a 7: intentos 2 a 7, uno por día
- * - Al cumplirse los 7 días: downgrade (lo decide otro proceso)
+ * Con el calendario [1, 2, 4, 6, 9, 12, 15] y 15 días de gracia:
+ * - Intento 1: día 1 (vencimiento)
+ * - Intento 2: día 2
+ * - Intento 3: día 4 ... intento 7: día 15
+ * - Al cumplirse los 15 días: downgrade (lo decide otro proceso)
+ *
+ * REPOSICIÓN: si un intento no pudo hacerse en su día (por ejemplo, el
+ * vencimiento fue a las 10pm, fuera del horario de cobro), se hace el
+ * siguiente día hábil. Los intentos que siguen conservan sus días del
+ * calendario siempre que sea posible, sin hacer nunca dos el mismo día.
  */
 export function evaluateRenewalAttempt(params: {
   now: Date;
   periodEnd: Date;
   lastRetryDate?: Date | null;
   retryAttempts: number;
-  maxAttempts: number;
+  retryScheduleDays: readonly number[];
   graceDays: number;
   timeZone: string;
 }): RetryDecision {
@@ -258,7 +295,7 @@ export function evaluateRenewalAttempt(params: {
     periodEnd,
     lastRetryDate,
     retryAttempts,
-    maxAttempts,
+    retryScheduleDays,
     graceDays,
     timeZone,
   } = params;
@@ -273,17 +310,25 @@ export function evaluateRenewalAttempt(params: {
     return { shouldCharge: false, reason: 'grace_period_expired' };
   }
 
-  // 3. Ya se hicieron todos los intentos permitidos
-  if (retryAttempts >= maxAttempts) {
+  // 3. Ya se hicieron todos los intentos del calendario
+  if (retryAttempts >= retryScheduleDays.length) {
     return { shouldCharge: false, reason: 'max_attempts_reached' };
   }
 
-  // 4. Fuera del horario 8am-8pm del tenant
+  // 4. Todavía no llega el día programado para el siguiente intento.
+  //    retryAttempts = intentos ya hechos, así que el siguiente es
+  //    retryScheduleDays[retryAttempts] (los arreglos empiezan en 0).
+  const nextScheduledDay = retryScheduleDays[retryAttempts];
+  if (getGraceDayNumber(now, periodEnd, timeZone) < nextScheduledDay) {
+    return { shouldCharge: false, reason: 'not_scheduled_today' };
+  }
+
+  // 5. Fuera del horario 8am-8pm del tenant
   if (!isWithinChargingHours(now, timeZone)) {
     return { shouldCharge: false, reason: 'outside_charging_hours' };
   }
 
-  // 5. Ya se intentó hoy (día calendario local del tenant)
+  // 6. Ya se intentó hoy (día calendario local del tenant)
   if (
     lastRetryDate &&
     getLocalDateKey(new Date(lastRetryDate), timeZone) ===

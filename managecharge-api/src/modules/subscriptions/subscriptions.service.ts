@@ -86,8 +86,8 @@ export class SubscriptionsService {
     /**
      * Número máximo de reintentos de cobro
      *
-     * @description Se lee SIEMPRE de la configuración (variable de entorno
-     * SUBSCRIPTION_RETRY_MAX_ATTEMPTS). Antes existía también la constante
+     * @description Se lee SIEMPRE de la configuración: es la cantidad de
+     * días de SUBSCRIPTION_RETRY_SCHEDULE_DAYS. Antes existía también la constante
      * SUBSCRIPTION_RETRY_CONFIG y algunas partes usaban una y otras la otra:
      * si el .env decía 5, el tenant guardaba 7 pero el downgrade ocurría a
      * los 5 intentos. Con una sola fuente eso ya no puede pasar.
@@ -102,11 +102,25 @@ export class SubscriptionsService {
     }
 
     /**
+     * Calendario de reintentos: días de la gracia en que se intenta cobrar
+     *
+     * @description Se lee de SUBSCRIPTION_RETRY_SCHEDULE_DAYS
+     * (ej: [1, 2, 4, 6, 9, 12, 15]). Ya viene validado desde
+     * configuration.ts: ascendente, sin repetidos y dentro de la gracia.
+     */
+    private get retryScheduleDays(): number[] {
+        return this.configService.getOrThrow<number[]>(
+            'subscriptions.retryScheduleDays',
+        );
+    }
+
+    /**
      * Días de gracia después del vencimiento antes del downgrade
      *
      * @description Se lee de SUBSCRIPTION_GRACE_PERIOD_DAYS. Durante estos
-     * días se intenta cobrar una vez por día; al cumplirse, el tenant
-     * pasa a FREE aunque no se hayan completado todos los intentos.
+     * días se intenta cobrar según el calendario de reintentos; al
+     * cumplirse, el tenant pasa a FREE aunque no se hayan completado
+     * todos los intentos.
      */
     private get gracePeriodDays(): number {
         return this.configService.getOrThrow<number>(
@@ -882,15 +896,17 @@ export class SubscriptionsService {
      *
      * @description Paso 1: MongoDB filtra los candidatos (vencidos, dentro
      * de la gracia y con intentos disponibles). Paso 2: para cada uno,
-     * evaluateRenewalAttempt() decide si toca cobrar AHORA según su hora
-     * local (8am-8pm) y si ya se le intentó cobrar hoy.
+     * evaluateRenewalAttempt() decide si toca cobrar AHORA según el
+     * calendario de reintentos, su hora local (8am-8pm) y si ya se le
+     * intentó cobrar hoy.
      *
-     * Resultado: como máximo UN intento por día por tenant, aunque el
-     * cron se ejecute cada hora.
+     * Resultado: los intentos ocurren en los días del calendario y nunca
+     * más de uno por día, aunque el cron se ejecute cada hora.
      */
     async processRenewalAttempts(): Promise<void> {
         const now = new Date();
         const maxAttempts = this.maxRetryAttempts;
+        const retryScheduleDays = this.retryScheduleDays;
         const graceDays = this.gracePeriodDays;
 
         const tenantsToRenew = await this.tenantModel
@@ -923,7 +939,7 @@ export class SubscriptionsService {
                 periodEnd: new Date(tenant.subscription.currentPeriodEnd),
                 lastRetryDate: tenant.subscription.lastRetryDate,
                 retryAttempts: tenant.subscription.retryAttempts || 0,
-                maxAttempts,
+                retryScheduleDays,
                 graceDays,
                 timeZone,
             });
