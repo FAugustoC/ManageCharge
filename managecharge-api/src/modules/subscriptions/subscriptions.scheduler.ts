@@ -43,9 +43,12 @@ export class SubscriptionsScheduler implements OnModuleInit {
    * Registra el cron dinámicamente usando SchedulerRegistry
    */
   onModuleInit() {
-    const cronSchedule = this.configService.get<string>(
+    // El valor por defecto vive SOLO en configuration.ts (fuente única).
+    // Cada ejecución revisa qué tenants están en su horario local 8am-8pm
+    // y aún no tienen intento de cobro hoy, así que correr seguido no
+    // genera cobros repetidos.
+    const cronSchedule = this.configService.getOrThrow<string>(
       'subscriptions.cronSchedule',
-      '0 0 */2 * * *', // Default: cada 2 horas
     );
 
     this.logger.log(`📅 Registrando cron de renovaciones: ${cronSchedule}`);
@@ -120,7 +123,14 @@ export class SubscriptionsScheduler implements OnModuleInit {
    * Procesar downgrades automáticos
    * Usa decorador @Cron porque es un schedule fijo
    */
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT, {
+  /**
+   * Downgrades automáticos
+   *
+   * @description Corre cada hora (antes: una vez al día a medianoche UTC).
+   * Así el downgrade ocurre como máximo 1 hora después de que terminan
+   * los días de gracia, en lugar de hasta 24 horas después.
+   */
+  @Cron(CronExpression.EVERY_HOUR, {
     name: 'subscription-downgrades',
     timeZone: 'UTC',
   })

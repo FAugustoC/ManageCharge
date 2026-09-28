@@ -82,7 +82,7 @@ export interface SubscriptionConfig {
   // Renovación automática
   autoRenew: boolean; // ¿Renovar automáticamente?
   retryAttempts: number; // Intentos de cobro realizados (0-7)
-  maxRetryAttempts: number; // Máximo de reintentos (default: 7)
+  maxRetryAttempts: number; // Máximo de reintentos (se define al suscribirse)
   lastRetryDate?: Date; // Último intento de cobro
   nextRetryDate?: Date; // Próximo intento programado
 
@@ -223,7 +223,9 @@ export class Tenant {
         currency: DEFAULT_CURRENCY,
         autoRenew: false,
         retryAttempts: 0,
-        maxRetryAttempts: 7,
+        // El plan free no tiene cobros. El valor real se asigna al
+        // suscribirse, leyéndolo de SUBSCRIPTION_RETRY_MAX_ATTEMPTS.
+        maxRetryAttempts: 0,
         subscriptionHistory: [],
       };
     },

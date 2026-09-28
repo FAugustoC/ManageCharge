@@ -33,9 +33,6 @@ export const DEFAULT_TIMEZONE = 'America/Guatemala';
 /** Moneda por defecto para tenants nuevos (código ISO 4217) */
 export const DEFAULT_CURRENCY = 'USD';
 
-/** Porcentaje de comisión de ManageCharge */
-export const PLATFORM_FEE_PERCENT = 5;
-
 /** Límites de paginación */
 export const PAGINATION = {
   DEFAULT_PAGE: 1,
@@ -88,12 +85,4 @@ export const SUBSCRIPTION_FEATURES = {
     maxClients: undefined,
     maxServices: undefined,
   },
-} as const;
-
-/**
- * Configuración de reintentos de cobro
- */
-export const SUBSCRIPTION_RETRY_CONFIG = {
-  MAX_ATTEMPTS: 7, // 7 días de gracia
-  GRACE_PERIOD_DAYS: 7,
 } as const;

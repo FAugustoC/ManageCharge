@@ -36,13 +36,22 @@ import {
 // Constants
 import {
     SUBSCRIPTION_FEATURES,
-    SUBSCRIPTION_RETRY_CONFIG,
     DEFAULT_TIMEZONE,
     getSubscriptionPrice,
 } from '../../common/constants/index.js';
 
 // Interfaces
 import type { PaymentMethodInfo } from '../../common/interfaces/index.js';
+
+// Reglas de fechas de facturación (funciones puras con pruebas propias)
+import {
+    calculatePeriodEnd,
+    evaluateRenewalAttempt,
+    getGraceCutoff,
+    getGracePeriodEnd,
+    isValidTimeZone,
+    resolveNewPeriodStart,
+} from './utils/billing-dates.util.js';
 
 // Providers
 import { StripeProvider } from '../../common/providers/payment/index.js';
@@ -73,6 +82,37 @@ export class SubscriptionsService {
         private readonly stripeProvider: StripeProvider,
         private readonly configService: ConfigService,
     ) { }
+
+    /**
+     * Número máximo de reintentos de cobro
+     *
+     * @description Se lee SIEMPRE de la configuración (variable de entorno
+     * SUBSCRIPTION_RETRY_MAX_ATTEMPTS). Antes existía también la constante
+     * SUBSCRIPTION_RETRY_CONFIG y algunas partes usaban una y otras la otra:
+     * si el .env decía 5, el tenant guardaba 7 pero el downgrade ocurría a
+     * los 5 intentos. Con una sola fuente eso ya no puede pasar.
+     *
+     * getOrThrow() falla si la clave no existe, en lugar de devolver
+     * undefined en silencio (el valor por defecto vive en configuration.ts).
+     */
+    private get maxRetryAttempts(): number {
+        return this.configService.getOrThrow<number>(
+            'subscriptions.retryMaxAttempts',
+        );
+    }
+
+    /**
+     * Días de gracia después del vencimiento antes del downgrade
+     *
+     * @description Se lee de SUBSCRIPTION_GRACE_PERIOD_DAYS. Durante estos
+     * días se intenta cobrar una vez por día; al cumplirse, el tenant
+     * pasa a FREE aunque no se hayan completado todos los intentos.
+     */
+    private get gracePeriodDays(): number {
+        return this.configService.getOrThrow<number>(
+            'subscriptions.gracePeriodDays',
+        );
+    }
 
     // ============================================================
     // MÉTODOS PÚBLICOS - Endpoints del tenant
@@ -404,18 +444,51 @@ export class SubscriptionsService {
         }
 
         // Calcular fechas del periodo
+        //
+        // REGLA: si el tenant todavía tiene premium (por ejemplo, canceló
+        // pero su mes sigue vigente) o está dentro de su período de gracia,
+        // el período nuevo empieza cuando venció el anterior, NO hoy.
+        // Así nadie puede dejar vencer su plan, usar los días de gracia y
+        // suscribirse al final para que el mes "empiece" ese día.
         const now = new Date();
-        const periodEnd = this.calculatePeriodEnd(plan, now);
+        const hasPremiumPlan =
+            !!tenant.subscription?.plan &&
+            tenant.subscription.plan !== SubscriptionPlan.FREE;
+
+        const periodStart = resolveNewPeriodStart({
+            now,
+            hasPremiumPlan,
+            currentPeriodEnd: tenant.subscription?.currentPeriodEnd,
+            graceDays: this.gracePeriodDays,
+        });
+
+        // ¿Es continuación del premium anterior o una suscripción nueva?
+        const isContinuation = periodStart.getTime() !== now.getTime();
+
+        // En una continuación se conserva la fecha de inicio original y,
+        // con ella, el día del mes en que se factura (día "ancla").
+        const startDate =
+            isContinuation && tenant.subscription?.startDate
+                ? new Date(tenant.subscription.startDate)
+                : periodStart;
+
+        const periodEnd = calculatePeriodEnd(
+            plan,
+            periodStart,
+            startDate.getUTCDate(),
+        );
 
         // Guardar historial anterior si existía
         const previousHistory = tenant.subscription?.subscriptionHistory || [];
-        if (tenant.subscription?.plan !== SubscriptionPlan.FREE) {
+        if (hasPremiumPlan) {
             previousHistory.push({
                 plan: tenant.subscription.plan,
-                startDate: tenant.subscription.startDate,
-                endDate: now,
+                startDate: tenant.subscription.currentPeriodStart,
+                // En una continuación, el período anterior terminó en su
+                // vencimiento real, no en la fecha de este nuevo pago
+                endDate: isContinuation ? periodStart : now,
                 status: 'completed',
-                reason: 'upgraded',
+                reason: isContinuation ? 'resubscribed' : 'upgraded',
             });
         }
 
@@ -427,14 +500,14 @@ export class SubscriptionsService {
                     subscription: {
                         plan,
                         status: SubscriptionStatus.ACTIVE,
-                        startDate: now,
-                        currentPeriodStart: now,
+                        startDate,
+                        currentPeriodStart: periodStart,
                         currentPeriodEnd: periodEnd,
                         amount: pricing.amount,
                         currency: pricing.currency,
                         autoRenew: true,
                         retryAttempts: 0,
-                        maxRetryAttempts: SUBSCRIPTION_RETRY_CONFIG.MAX_ATTEMPTS,
+                        maxRetryAttempts: this.maxRetryAttempts,
                         paymentMethod: {
                             provider: 'stripe',
                             customerId,
@@ -473,6 +546,7 @@ export class SubscriptionsService {
             success: true,
             plan,
             status: SubscriptionStatus.ACTIVE,
+            currentPeriodStart: periodStart,
             currentPeriodEnd: periodEnd,
             amount: pricing.amount,
             currency: pricing.currency,
@@ -760,8 +834,11 @@ export class SubscriptionsService {
             .select(
                 'name email slug subscription.plan subscription.retryAttempts subscription.currentPeriodEnd subscription.lastRetryDate',
             )
-            .sort({ 'subscription.retryAttempts': -1 })
+            .sort({ 'subscription.currentPeriodEnd': 1 })
             .lean();
+
+        const graceDays = this.gracePeriodDays;
+        const msPerDay = 1000 * 60 * 60 * 24;
 
         return tenants.map((tenant) => ({
             tenantId: tenant._id,
@@ -770,16 +847,28 @@ export class SubscriptionsService {
             slug: tenant.slug,
             plan: tenant.subscription?.plan,
             retryAttempts: tenant.subscription?.retryAttempts || 0,
-            maxRetryAttempts: SUBSCRIPTION_RETRY_CONFIG.MAX_ATTEMPTS,
+            maxRetryAttempts: this.maxRetryAttempts,
             periodEnd: tenant.subscription?.currentPeriodEnd,
             lastRetryDate: tenant.subscription?.lastRetryDate,
-            daysInGracePeriod: tenant.subscription?.lastRetryDate
-                ? Math.ceil(
-                    (Date.now() -
-                        new Date(tenant.subscription.lastRetryDate).getTime()) /
-                    (1000 * 60 * 60 * 24),
+            // Días transcurridos desde el VENCIMIENTO (antes se contaba
+            // desde el último intento, lo que no reflejaba la gracia real)
+            daysInGracePeriod: tenant.subscription?.currentPeriodEnd
+                ? Math.max(
+                    0,
+                    Math.ceil(
+                        (Date.now() -
+                            new Date(tenant.subscription.currentPeriodEnd).getTime()) /
+                        msPerDay,
+                    ),
                 )
                 : 0,
+            gracePeriodDays: graceDays,
+            gracePeriodEndsAt: tenant.subscription?.currentPeriodEnd
+                ? getGracePeriodEnd(
+                    new Date(tenant.subscription.currentPeriodEnd),
+                    graceDays,
+                )
+                : null,
         }));
     }
 
@@ -789,76 +878,116 @@ export class SubscriptionsService {
 
     /**
      * Procesar intentos de renovación
-     * Ejecutado por el Scheduler
+     * Ejecutado por el Scheduler (varias veces al día)
      *
-     * @description Busca tenants en grace period o con
-     * suscripción vencida y autoRenew = true,
-     * luego intenta cobrar respetando el timezone del tenant
+     * @description Paso 1: MongoDB filtra los candidatos (vencidos, dentro
+     * de la gracia y con intentos disponibles). Paso 2: para cada uno,
+     * evaluateRenewalAttempt() decide si toca cobrar AHORA según su hora
+     * local (8am-8pm) y si ya se le intentó cobrar hoy.
+     *
+     * Resultado: como máximo UN intento por día por tenant, aunque el
+     * cron se ejecute cada hora.
      */
     async processRenewalAttempts(): Promise<void> {
         const now = new Date();
-        const maxAttempts = this.configService.get<number>(
-            'subscriptions.retryMaxAttempts',
-            SUBSCRIPTION_RETRY_CONFIG.MAX_ATTEMPTS,
-        );
+        const maxAttempts = this.maxRetryAttempts;
+        const graceDays = this.gracePeriodDays;
 
-        // Buscar tenants que necesitan renovación
         const tenantsToRenew = await this.tenantModel
             .find({
                 'subscription.autoRenew': true,
                 'subscription.status': {
                     $in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.GRACE_PERIOD],
                 },
-                'subscription.currentPeriodEnd': { $lte: now },
-                'subscription.retryAttempts': { $lt: maxAttempts },
                 'subscription.plan': { $ne: SubscriptionPlan.FREE },
+                // Vencido, pero todavía dentro de los días de gracia
+                'subscription.currentPeriodEnd': {
+                    $lte: now,
+                    $gt: getGraceCutoff(now, graceDays),
+                },
+                'subscription.retryAttempts': { $lt: maxAttempts },
             } as any)
             .exec();
 
         this.logger.log(
-            `Encontrados ${tenantsToRenew.length} tenants para renovar`,
+            `Encontrados ${tenantsToRenew.length} tenants con renovación pendiente`,
         );
 
+        let attempted = 0;
+
         for (const tenant of tenantsToRenew) {
+            const timeZone = this.resolveTenantTimeZone(tenant);
+
+            const decision = evaluateRenewalAttempt({
+                now,
+                periodEnd: new Date(tenant.subscription.currentPeriodEnd),
+                lastRetryDate: tenant.subscription.lastRetryDate,
+                retryAttempts: tenant.subscription.retryAttempts || 0,
+                maxAttempts,
+                graceDays,
+                timeZone,
+            });
+
+            if (!decision.shouldCharge) {
+                this.logger.debug(
+                    `Tenant ${tenant._id.toString()}: sin cobro ahora (${decision.reason})`,
+                );
+                continue;
+            }
+
+            attempted++;
             await this.processRenewalForTenant(tenant);
         }
+
+        this.logger.log(`Intentos de cobro realizados: ${attempted}`);
     }
 
     /**
-     * Hacer downgrade a FREE para tenants que agotaron intentos
-     * Ejecutado por el Scheduler a medianoche
+     * Hacer downgrade a FREE
+     * Ejecutado por el Scheduler cada hora
+     *
+     * @description Dos casos:
+     * 1. Renovación no pagada: pasaron los días de gracia completos desde
+     *    el vencimiento. Se decide por DÍAS transcurridos, no por cantidad
+     *    de rechazos: si un día no se pudo intentar el cobro (por ejemplo,
+     *    el servidor estuvo caído), el tenant no obtiene días extra.
+     * 2. Suscripción cancelada: su período pagado terminó (sin gracia,
+     *    porque el tenant decidió no renovar).
      */
     async downgradeExpiredSubscriptions(): Promise<void> {
-        const maxAttempts = this.configService.get<number>(
-            'subscriptions.retryMaxAttempts',
-            SUBSCRIPTION_RETRY_CONFIG.MAX_ATTEMPTS,
-        );
+        const now = new Date();
 
-        // Buscar tenants en grace period que agotaron intentos
-        const expiredTenants = await this.tenantModel
+        const gracePeriodExpired = await this.tenantModel
             .find({
-                'subscription.status': SubscriptionStatus.GRACE_PERIOD,
-                'subscription.retryAttempts': { $gte: maxAttempts },
+                'subscription.status': {
+                    $in: [SubscriptionStatus.ACTIVE, SubscriptionStatus.GRACE_PERIOD],
+                },
+                'subscription.plan': { $ne: SubscriptionPlan.FREE },
+                'subscription.currentPeriodEnd': {
+                    $lte: getGraceCutoff(now, this.gracePeriodDays),
+                },
             } as any)
             .exec();
 
-        // También buscar canceladas cuyo periodo ya terminó
         const cancelledExpired = await this.tenantModel
             .find({
                 'subscription.status': SubscriptionStatus.CANCELLED,
-                'subscription.currentPeriodEnd': { $lte: new Date() },
+                'subscription.currentPeriodEnd': { $lte: now },
                 'subscription.plan': { $ne: SubscriptionPlan.FREE },
             } as any)
             .exec();
 
-        const allToDowngrade = [...expiredTenants, ...cancelledExpired];
-
         this.logger.log(
-            `Procesando downgrade para ${allToDowngrade.length} tenants`,
+            `Procesando downgrade: ${gracePeriodExpired.length} por gracia vencida, ` +
+            `${cancelledExpired.length} por cancelación`,
         );
 
-        for (const tenant of allToDowngrade) {
-            await this.downgradeToFree(tenant, 'max_retry_attempts_reached');
+        for (const tenant of gracePeriodExpired) {
+            await this.downgradeToFree(tenant, 'grace_period_expired');
+        }
+
+        for (const tenant of cancelledExpired) {
+            await this.downgradeToFree(tenant, 'cancelled_period_ended');
         }
     }
 
@@ -983,16 +1112,8 @@ export class SubscriptionsService {
     ): Promise<void> {
         const tenantId = tenant._id.toString();
 
-        // Verificar timezone del tenant (8am-8pm)
-        const timezone =
-            tenant.settings?.timezone || DEFAULT_TIMEZONE;
-
-        if (!this.isWithinChargingHours(timezone)) {
-            this.logger.debug(
-                `Tenant ${tenantId}: fuera del horario de cobro en ${timezone}`,
-            );
-            return;
-        }
+        // El horario (8am-8pm local) y la regla de un intento por día ya
+        // fueron verificados por evaluateRenewalAttempt() antes de llegar aquí.
 
         // Verificar que tiene método de pago
         if (!tenant.subscription?.paymentMethod) {
@@ -1050,10 +1171,7 @@ export class SubscriptionsService {
             );
         } else {
             // ❌ Cobro fallido - Incrementar intentos
-            const maxAttempts = this.configService.get<number>(
-                'subscriptions.retryMaxAttempts',
-                SUBSCRIPTION_RETRY_CONFIG.MAX_ATTEMPTS,
-            );
+            const maxAttempts = this.maxRetryAttempts;
 
             await this.tenantModel.findByIdAndUpdate(
                 tenant._id,
@@ -1104,9 +1222,18 @@ export class SubscriptionsService {
     
     // Calcular nuevo periodo desde el vencimiento original
     const newPeriodStart = originalPeriodEnd;
-    const newPeriodEnd = this.calculatePeriodEnd(
+
+    // El día "ancla" es el día del mes en que empezó la suscripción.
+    // Evita que un tenant que se suscribió el 31 termine facturando
+    // el 28 para siempre después de pasar por febrero.
+    const anchorDay = tenant.subscription.startDate
+        ? new Date(tenant.subscription.startDate).getUTCDate()
+        : newPeriodStart.getUTCDate();
+
+    const newPeriodEnd = calculatePeriodEnd(
         tenant.subscription.plan as SubscriptionPlan,
         newPeriodStart,  // ← Desde el vencimiento, NO desde hoy
+        anchorDay,
     );
 
     this.logger.log(
@@ -1231,59 +1358,27 @@ export class SubscriptionsService {
     }
 
     /**
-     * Verificar si estamos dentro del horario de cobro (8am-8pm)
-     * respetando el timezone del tenant
+     * Zona horaria válida del tenant
+     *
+     * @description Si el tenant tiene guardada una zona inválida (datos
+     * corruptos), se registra como ERROR para corregirla y se usa la zona
+     * por defecto, para no cobrar de madrugada a clientes de Latinoamérica.
      */
-    private isWithinChargingHours(timezone: string): boolean {
-        try {
-            const now = new Date();
+    private resolveTenantTimeZone(tenant: TenantDocument): string {
+        const timeZone = tenant.settings?.timezone;
 
-            // Obtener hora actual en el timezone del tenant
-            const formatter = new Intl.DateTimeFormat('en-US', {
-                timeZone: timezone,
-                hour: 'numeric',
-                hour12: false,
-            });
+        if (timeZone && isValidTimeZone(timeZone)) {
+            return timeZone;
+        }
 
-            const hour = parseInt(formatter.format(now), 10);
-
-            // Permitir cobros entre 8am y 8pm
-            return hour >= 8 && hour < 20;
-        } catch (error) {
-            // Timezone inválido guardado en el tenant: se registra como
-            // ERROR (no warning) porque indica datos corruptos que hay
-            // que corregir. Se usa la zona por defecto en lugar de UTC
-            // para no cobrar de madrugada a clientes de Latinoamérica.
+        if (timeZone) {
             this.logger.error(
-                `Timezone inválido: "${timezone}". Usando ${DEFAULT_TIMEZONE}.`,
+                `Tenant ${tenant._id.toString()}: timezone inválido "${timeZone}". ` +
+                `Usando ${DEFAULT_TIMEZONE}.`,
             );
-
-            if (timezone === DEFAULT_TIMEZONE) {
-                // Evita recursión infinita si la constante fuera inválida
-                const hour = new Date().getUTCHours();
-                return hour >= 8 && hour < 20;
-            }
-
-            return this.isWithinChargingHours(DEFAULT_TIMEZONE);
-        }
-    }
-
-    /**
-     * Calcular fecha de fin del periodo según el plan
-     */
-    private calculatePeriodEnd(
-        plan: SubscriptionPlan,
-        startDate: Date,
-    ): Date {
-        const end = new Date(startDate);
-
-        if (plan === SubscriptionPlan.PREMIUM_ANNUAL) {
-            end.setFullYear(end.getFullYear() + 1); // +1 año
-        } else {
-            end.setMonth(end.getMonth() + 1); // +1 mes
         }
 
-        return end;
+        return DEFAULT_TIMEZONE;
     }
 
     /**
@@ -1315,11 +1410,13 @@ export class SubscriptionsService {
         }
 
         if (subscription.status === SubscriptionStatus.GRACE_PERIOD) {
+            const graceEndsAt = getGracePeriodEnd(periodEnd, this.gracePeriodDays);
+
             messages.push(
-                `No pudimos renovar tu suscripción. Intento ${subscription.retryAttempts}/7.`,
+                `No pudimos renovar tu suscripción. Intento ${subscription.retryAttempts}/${this.maxRetryAttempts}.`,
             );
             messages.push(
-                'Por favor actualiza tu método de pago para evitar perder el acceso premium.',
+                `Actualiza tu método de pago antes del ${graceEndsAt.toLocaleDateString()} para conservar el acceso premium.`,
             );
             return messages;
         }

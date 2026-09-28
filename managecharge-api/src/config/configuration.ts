@@ -31,6 +31,57 @@ function parseExpiryToSeconds(expiry: string | number | undefined): number {
 }
 
 /**
+ * Leer una variable numérica de entorno y validarla
+ *
+ * @description Si la variable no existe se usa el valor por defecto.
+ * Si existe pero es inválida (texto, fuera de rango, decimal donde se
+ * espera un entero) se lanza un error y el API NO arranca.
+ *
+ * Esto se llama "fail fast" (fallar rápido): es preferible que el
+ * servidor se niegue a iniciar con un mensaje claro, a que arranque
+ * y cobre comisiones o reintentos con un valor equivocado.
+ *
+ * @example
+ * readNumber('PORT', 3000, { min: 1, max: 65535, integer: true })
+ */
+function readNumber(
+  name: string,
+  defaultValue: number,
+  options: { min?: number; max?: number; integer?: boolean } = {},
+): number {
+  const raw = process.env[name];
+
+  if (raw === undefined || raw.trim() === '') {
+    return defaultValue;
+  }
+
+  const value = Number(raw);
+  const { min, max, integer } = options;
+
+  const isInvalid =
+    Number.isNaN(value) ||
+    (integer && !Number.isInteger(value)) ||
+    (min !== undefined && value < min) ||
+    (max !== undefined && value > max);
+
+  if (isInvalid) {
+    const rules = [
+      integer ? 'entero' : 'número',
+      min !== undefined ? `mínimo ${min}` : null,
+      max !== undefined ? `máximo ${max}` : null,
+    ]
+      .filter(Boolean)
+      .join(', ');
+
+    throw new Error(
+      `Variable de entorno inválida: ${name}="${raw}". Debe ser ${rules}.`,
+    );
+  }
+
+  return value;
+}
+
+/**
  * Configuración centralizada de la aplicación
  * 
  * @description Todas las variables de entorno se leen aquí
@@ -40,7 +91,7 @@ export const configuration = () => ({
   app: {
     name: process.env.APP_NAME || 'ManageCharge',
     env: process.env.NODE_ENV || 'development',
-    port: parseInt(process.env.PORT || '3000', 10),
+    port: readNumber('PORT', 3000, { min: 1, max: 65535, integer: true }),
     apiPrefix: process.env.API_PREFIX || 'api/v1',
     frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3001',
   },
@@ -98,19 +149,38 @@ export const configuration = () => ({
   stripe: {
     secretKey: process.env.STRIPE_SECRET_KEY || '',
     webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
-    platformFeePercent: parseInt(process.env.PLATFORM_FEE_PERCENT || '5', 10),
+    /**
+     * Comisión de ManageCharge en porcentaje (ej: 5 = 5%, 2.5 = 2.5%)
+     * Fuente única de verdad: no existe una constante equivalente.
+     */
+    platformFeePercent: readNumber('PLATFORM_FEE_PERCENT', 5, {
+      min: 0,
+      max: 100,
+    }),
   },
 
   subscriptions: {
-    retryMaxAttempts: parseInt(process.env.SUBSCRIPTION_RETRY_MAX_ATTEMPTS || '7',10),
-    gracePeriodDays: parseInt(process.env.SUBSCRIPTION_GRACE_PERIOD_DAYS || '7',10),
+    // Fuente única de verdad para los reintentos de cobro
+    retryMaxAttempts: readNumber('SUBSCRIPTION_RETRY_MAX_ATTEMPTS', 7, {
+      min: 1,
+      max: 30,
+      integer: true,
+    }),
+    gracePeriodDays: readNumber('SUBSCRIPTION_GRACE_PERIOD_DAYS', 7, {
+      min: 1,
+      max: 30,
+      integer: true,
+    }),
 
     // Habilitar/deshabilitar automatización
     autoChargeEnabled: process.env.SUBSCRIPTION_AUTO_CHARGE_ENABLED === 'true',
     autoDowngradeEnabled: process.env.SUBSCRIPTION_AUTO_DOWNGRADE_ENABLED === 'true',
 
-    // Cron schedule para reintentos
-    cronSchedule: process.env.SUBSCRIPTION_RETRY_CRON || '0 */2 8-20 * * *',
+    // Cron de renovaciones. Por defecto: cada hora, en punto.
+    // No se limita a un rango de horas UTC: cada tenant se evalúa con
+    // su propio horario local (8am-8pm), y la regla de un intento por
+    // día evita cobros repetidos aunque el cron corra muchas veces.
+    cronSchedule: process.env.SUBSCRIPTION_RETRY_CRON || '0 0 * * * *',
   },
 
 });
