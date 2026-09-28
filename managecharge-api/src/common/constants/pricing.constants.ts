@@ -149,13 +149,19 @@ export function getSubscriptionPrice(
     countryCode = COUNTRY_NAME_TO_CODE[country] || 'DEFAULT';
   }
 
+  // Las tablas usan "as const", así que TypeScript solo acepta sus claves
+  // exactas ('GT', 'USD'...). Aquí buscamos con un texto cualquiera que
+  // viene del usuario, así que las vemos como diccionarios de texto.
+  // Si la clave no existe, el resultado es undefined y usamos el respaldo.
+  const currencyByCountry: Readonly<Record<string, string>> = CURRENCY_BY_COUNTRY;
+  const pricingByCurrency: Readonly<Record<string, number>> =
+    plan === 'monthly' ? PREMIUM_MONTHLY_PRICING : PREMIUM_ANNUAL_PRICING;
+
   // Obtener moneda
-  const currency =
-    CURRENCY_BY_COUNTRY[countryCode] || CURRENCY_BY_COUNTRY.DEFAULT;
+  const currency = currencyByCountry[countryCode] ?? CURRENCY_BY_COUNTRY.DEFAULT;
 
   // Obtener precio
-  const pricing = plan === 'monthly' ? PREMIUM_MONTHLY_PRICING : PREMIUM_ANNUAL_PRICING;
-  const amount = pricing[currency] || pricing.USD;
+  const amount = pricingByCurrency[currency] ?? pricingByCurrency.USD;
 
   // Obtener símbolo
   const symbol = CURRENCY_SYMBOLS[currency] || '$';

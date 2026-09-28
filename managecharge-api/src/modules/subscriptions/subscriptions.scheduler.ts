@@ -15,6 +15,7 @@ import { Cron, CronExpression, SchedulerRegistry } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { CronJob } from 'cron';
 import { SubscriptionsService } from './subscriptions.service.js';
+import { getErrorMessage, getErrorStack } from '../../common/utils/index.js';
 
 @Injectable()
 export class SubscriptionsScheduler implements OnModuleInit {
@@ -75,8 +76,8 @@ export class SubscriptionsScheduler implements OnModuleInit {
       this.logger.log(`⏰ Próxima ejecución: ${job.nextDate().toString()}`);
     } catch (error) {
       this.logger.error(
-        `❌ Error al registrar cron de renovaciones: ${error.message}`,
-        error.stack,
+        `❌ Error al registrar cron de renovaciones: ${getErrorMessage(error)}`,
+        getErrorStack(error),
       );
     }
   }
@@ -114,7 +115,7 @@ export class SubscriptionsScheduler implements OnModuleInit {
     } catch (error) {
       this.logger.error(
         '❌ Error en proceso de renovaciones automáticas',
-        error.stack,
+        getErrorStack(error),
       );
     }
   }
@@ -161,7 +162,7 @@ export class SubscriptionsScheduler implements OnModuleInit {
     } catch (error) {
       this.logger.error(
         '❌ Error en proceso de downgrades automáticos',
-        error.stack,
+        getErrorStack(error),
       );
     }
   }
@@ -195,7 +196,7 @@ export class SubscriptionsScheduler implements OnModuleInit {
     } catch (error) {
       this.logger.error(
         '❌ Error al generar estadísticas diarias',
-        error.stack,
+        getErrorStack(error),
       );
     }
   }

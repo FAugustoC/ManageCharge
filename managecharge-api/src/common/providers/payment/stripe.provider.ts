@@ -11,6 +11,7 @@ import {
 } from '../../interfaces/payment-provider.interface.js';
 import { PaymentProvider } from '../../enums/payment-provider.enum.js';
 import { toMinorUnits } from '../../constants/currency.constants.js';
+import { getErrorMessage, getErrorStack } from '../../utils/error.utils.js';
 
 /**
  * Implementación del proveedor de pagos Stripe
@@ -76,8 +77,8 @@ export class StripeProvider implements IPaymentProvider {
       this.logger.log(`Customer creado exitosamente: ${customer.id}`);
       return customer.id;
     } catch (error) {
-      this.logger.error('Error al crear customer en Stripe', error);
-      throw new Error(`Error al crear customer: ${error.message}`);
+      this.logger.error('Error al crear customer en Stripe', getErrorStack(error));
+      throw new Error(`Error al crear customer: ${getErrorMessage(error)}`);
     }
   }
 
@@ -148,19 +149,26 @@ export class StripeProvider implements IPaymentProvider {
       };
     } catch (error) {
       this.logger.error('Error al guardar método de pago');
-      this.logger.error(error);
+      this.logger.error(
+        `Error al guardar método de pago: ${getErrorMessage(error)}`,
+        getErrorStack(error),
+      );
 
-      // MEJORAR: Manejo de errores más específico
-      if (error.type === 'StripeCardError') {
+      // `instanceof` verifica la clase real del error. Dentro de cada if,
+      // TypeScript ya sabe que es un error de Stripe y permite usar
+      // error.message con seguridad (esto se llama "narrowing").
+      if (error instanceof Stripe.errors.StripeCardError) {
         // Errores de la tarjeta (rechazos, fondos insuficientes, etc.)
         throw new Error(error.message);
-      } else if (error.type === 'StripeInvalidRequestError') {
+      }
+
+      if (error instanceof Stripe.errors.StripeInvalidRequestError) {
         // Errores de parámetros inválidos
         throw new Error(`Parámetros inválidos: ${error.message}`);
       }
 
       // Error genérico
-      throw new Error(`Error al guardar método de pago: ${error.message}`);
+      throw new Error(`Error al guardar método de pago: ${getErrorMessage(error)}`);
     }
   }
 
@@ -208,9 +216,9 @@ export class StripeProvider implements IPaymentProvider {
         };
       }
     } catch (error) {
-      this.logger.error('Error al procesar cobro', error);
+      this.logger.error('Error al procesar cobro', getErrorStack(error));
 
-      // ✅ FIX 2: Usar Stripe.errors.StripeError en lugar de Stripe.StripeError
+      // Errores de Stripe: incluyen un código útil (ej: card_declined)
       if (error instanceof Stripe.errors.StripeError) {
         return {
           success: false,
@@ -222,7 +230,7 @@ export class StripeProvider implements IPaymentProvider {
       return {
         success: false,
         errorCode: 'unknown_error',
-        errorMessage: error.message || 'Error desconocido',
+        errorMessage: getErrorMessage(error),
       };
     }
   }
@@ -246,9 +254,9 @@ export class StripeProvider implements IPaymentProvider {
 
       this.logger.log('Método de pago desvinculado exitosamente');
     } catch (error) {
-      this.logger.error('Error al desvincular método de pago', error);
+      this.logger.error('Error al desvincular método de pago', getErrorStack(error));
       throw new Error(
-        `Error al desvincular método de pago: ${error.message}`,
+        `Error al desvincular método de pago: ${getErrorMessage(error)}`,
       );
     }
   }
@@ -290,8 +298,8 @@ export class StripeProvider implements IPaymentProvider {
 
       this.logger.log(`Reembolso procesado exitosamente: ${refund.id}`);
     } catch (error) {
-      this.logger.error('Error al procesar reembolso', error);
-      throw new Error(`Error al procesar reembolso: ${error.message}`);
+      this.logger.error('Error al procesar reembolso', getErrorStack(error));
+      throw new Error(`Error al procesar reembolso: ${getErrorMessage(error)}`);
     }
   }
 
@@ -308,8 +316,8 @@ export class StripeProvider implements IPaymentProvider {
     try {
       return await this.stripe.customers.retrieve(customerId);
     } catch (error) {
-      this.logger.error('Error al obtener customer', error);
-      throw new Error(`Error al obtener customer: ${error.message}`);
+      this.logger.error('Error al obtener customer', getErrorStack(error));
+      throw new Error(`Error al obtener customer: ${getErrorMessage(error)}`);
     }
   }
 
@@ -330,8 +338,8 @@ export class StripeProvider implements IPaymentProvider {
 
       return paymentMethods.data;
     } catch (error) {
-      this.logger.error('Error al listar métodos de pago', error);
-      throw new Error(`Error al listar métodos de pago: ${error.message}`);
+      this.logger.error('Error al listar métodos de pago', getErrorStack(error));
+      throw new Error(`Error al listar métodos de pago: ${getErrorMessage(error)}`);
     }
   }
 }

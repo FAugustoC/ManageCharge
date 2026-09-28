@@ -16,26 +16,38 @@
     "incremental": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-
-    "types": ["node", "jest"],
-
-    "strict": false,
-    "strictNullChecks": true,
+    "types": [
+      "node",
+      "jest"
+    ],
+    "strict": true,
     "strictPropertyInitialization": false,
-    "useUnknownInCatchVariables": false,
-    "noImplicitAny": false,
-    "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false,
-
     "paths": {
-      "@common": ["./src/common/index.js"],
-      "@common/*": ["./src/common/*"],
-      "@config": ["./src/config/index.js"],
-      "@config/*": ["./src/config/*"],
-      "@modules": ["./src/modules/index.js"],
-      "@modules/*": ["./src/modules/*"],
-      "@database": ["./src/database/index.js"],
-      "@database/*": ["./src/database/*"]
+      "@common": [
+        "./src/common/index.js"
+      ],
+      "@common/*": [
+        "./src/common/*"
+      ],
+      "@config": [
+        "./src/config/index.js"
+      ],
+      "@config/*": [
+        "./src/config/*"
+      ],
+      "@modules": [
+        "./src/modules/index.js"
+      ],
+      "@modules/*": [
+        "./src/modules/*"
+      ],
+      "@database": [
+        "./src/database/index.js"
+      ],
+      "@database/*": [
+        "./src/database/*"
+      ]
     }
   }
 }

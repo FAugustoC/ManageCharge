@@ -43,6 +43,9 @@ import {
 // Interfaces
 import type { PaymentMethodInfo } from '../../common/interfaces/index.js';
 
+// Utilidades
+import { getErrorMessage, getErrorStack } from '../../common/utils/index.js';
+
 // Reglas de fechas de facturación (funciones puras con pruebas propias)
 import {
     calculatePeriodEnd,
@@ -51,7 +54,7 @@ import {
     getGracePeriodEnd,
     isValidTimeZone,
     resolveNewPeriodStart,
-} from './utils/billing-dates.util.js';
+} from './utils/index.js';
 
 // Providers
 import { StripeProvider } from '../../common/providers/payment/index.js';
@@ -384,18 +387,18 @@ export class SubscriptionsService {
                 provider: 'stripe',
                 providerCustomerId: customerId,
                 errorCode: 'card_declined',
-                errorMessage: error.message || 'Error al guardar método de pago',
+                errorMessage: getErrorMessage(error, 'Error al guardar método de pago'),
                 metadata: { initiatedBy: 'system' },
             });
 
             this.logger.error(
                 `Error al guardar método de pago para tenant ${tenantId}`,
-                error.stack,
+                getErrorStack(error),
             );
 
             // IMPORTANTE: Lanzar BadRequestException (400)
             throw new BadRequestException(
-                `No pudimos guardar tu método de pago: ${error.message}. ` +
+                `No pudimos guardar tu método de pago: ${getErrorMessage(error)}. ` +
                 'Por favor verifica los datos de tu tarjeta.',
             );
         }
@@ -610,7 +613,7 @@ export class SubscriptionsService {
             } catch (error) {
                 // No es crítico si falla, continuamos con el nuevo
                 this.logger.warn(
-                    `No se pudo desvincular método anterior: ${error.message}`,
+                    `No se pudo desvincular método anterior: ${getErrorMessage(error)}`,
                 );
             }
         }
