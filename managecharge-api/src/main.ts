@@ -1,11 +1,19 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: true → Nest guarda una copia EXACTA de los bytes recibidos
+  // en req.rawBody (Buffer), además del JSON ya parseado en req.body.
+  // Stripe firma esos bytes originales: si verificáramos la firma con
+  // el JSON re-serializado, cualquier diferencia (espacios, orden de
+  // claves, caracteres unicode) haría fallar la verificación.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
+  });
   const configService = app.get(ConfigService);
 
   // Obtener configuración
