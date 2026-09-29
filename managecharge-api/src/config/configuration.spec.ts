@@ -76,3 +76,48 @@ describe('configuration() - reintentos de cobro', () => {
     warn.mockRestore();
   });
 });
+
+/**
+ * Pruebas del secreto de firma de webhooks de Stripe
+ *
+ * @description Sin STRIPE_WEBHOOK_SECRET no se puede verificar que un
+ * webhook viene de Stripe. En producción es obligatorio.
+ */
+describe('configuration() - STRIPE_WEBHOOK_SECRET', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.STRIPE_WEBHOOK_SECRET;
+    delete process.env.NODE_ENV;
+    delete process.env.SUBSCRIPTION_GRACE_PERIOD_DAYS;
+    delete process.env.SUBSCRIPTION_RETRY_SCHEDULE_DAYS;
+    delete process.env.SUBSCRIPTION_RETRY_MAX_ATTEMPTS;
+  });
+
+  afterAll(() => {
+    process.env = originalEnv;
+  });
+
+  it('acepta un secreto con formato whsec_', () => {
+    process.env.STRIPE_WEBHOOK_SECRET = 'whsec_abc123';
+    expect(configuration().stripe.webhookSecret).toBe('whsec_abc123');
+  });
+
+  it('en desarrollo permite arrancar sin secreto', () => {
+    process.env.NODE_ENV = 'development';
+    expect(configuration().stripe.webhookSecret).toBe('');
+  });
+
+  it('en producción NO arranca sin secreto (fail fast)', () => {
+    process.env.NODE_ENV = 'production';
+    expect(() => configuration()).toThrow(
+      'STRIPE_WEBHOOK_SECRET es obligatoria en producción',
+    );
+  });
+
+  it('rechaza un valor con formato incorrecto (ej: la clave sk_ por error)', () => {
+    process.env.STRIPE_WEBHOOK_SECRET = 'sk_test_123';
+    expect(() => configuration()).toThrow('debe empezar con "whsec_"');
+  });
+});

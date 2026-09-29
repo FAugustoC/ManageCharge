@@ -14,3 +14,5 @@ export * from './subscription-status.enum.js';
 export * from './transaction-type.enum.js';
 export * from './transaction-status.enum.js';
 export * from './payment-provider.enum.js';
+export * from './webhook-event-type.enum.js';
+export * from './webhook-event-status.enum.js';

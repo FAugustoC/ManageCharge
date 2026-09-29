@@ -2,3 +2,4 @@ export * from './pagination.interface.js';
 export * from './jwt-payload.interface.js';
 export * from './address.interface.js';
 export * from './payment-provider.interface.js';
+export * from './webhook-adapter.interface.js';

@@ -17,6 +17,7 @@ import { ServicesModule } from './modules/services/index.js';
 import { PaymentsModule } from './modules/payments/index.js';
 import { SuperAdminModule } from './modules/super-admin/index.js';
 import { SubscriptionsModule } from './modules/subscriptions/index.js';
+import { WebhooksModule } from './modules/webhooks/index.js';
 
 // Guards
 import { JwtAuthGuard } from './modules/auth/guards/index.js';
@@ -45,6 +46,7 @@ import { JwtAuthGuard } from './modules/auth/guards/index.js';
     PaymentsModule,
     SuperAdminModule,
     SubscriptionsModule,
+    WebhooksModule,
     // NotificationsModule,
   ],
   controllers: [AppController],

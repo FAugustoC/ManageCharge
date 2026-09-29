@@ -168,6 +168,42 @@ function readRetryConfig() {
 }
 
 /**
+ * Leer y validar el secreto de firma de los webhooks de Stripe
+ *
+ * @description Stripe firma cada webhook con este secreto (empieza con
+ * "whsec_"). Sin él no podemos comprobar que un webhook es auténtico.
+ *
+ * - Producción: es OBLIGATORIO. Si falta, el API no arranca (fail fast):
+ *   sin él, cada pago confirmado por Stripe se perdería en silencio.
+ * - Desarrollo: puede faltar (quizás aún no usas webhooks). El endpoint
+ *   responderá 503 y el adaptador avisa en los logs al arrancar.
+ * - Si existe, debe tener el formato correcto en cualquier ambiente.
+ */
+function readStripeWebhookSecret(): string {
+  const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim() ?? '';
+  const environment = process.env.NODE_ENV || 'development';
+
+  if (secret === '') {
+    if (environment === 'production') {
+      throw new Error(
+        'Variable de entorno faltante: STRIPE_WEBHOOK_SECRET es obligatoria en producción. ' +
+        'Obtenla en Stripe Dashboard → Developers → Webhooks → tu endpoint → Signing secret.',
+      );
+    }
+    return '';
+  }
+
+  if (!secret.startsWith('whsec_')) {
+    throw new Error(
+      'Variable de entorno inválida: STRIPE_WEBHOOK_SECRET debe empezar con "whsec_". ' +
+      '¿Pegaste la clave secreta de la API (sk_...) por error?',
+    );
+  }
+
+  return secret;
+}
+
+/**
  * Configuración centralizada de la aplicación
  * 
  * @description Todas las variables de entorno se leen aquí
@@ -234,7 +270,7 @@ export const configuration = () => ({
 
   stripe: {
     secretKey: process.env.STRIPE_SECRET_KEY || '',
-    webhookSecret: process.env.STRIPE_WEBHOOK_SECRET || '',
+    webhookSecret: readStripeWebhookSecret(),
     /**
      * Comisión de ManageCharge en porcentaje (ej: 5 = 5%, 2.5 = 2.5%)
      * Fuente única de verdad: no existe una constante equivalente.
