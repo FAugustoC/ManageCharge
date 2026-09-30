@@ -20,8 +20,15 @@
  *
  * 3. DOWNGRADE POR DÍAS: el downgrade ocurre cuando transcurren los días
  *    de gracia completos desde el vencimiento, no al contar rechazos.
+ *
+ * 4. COBRO INMEDIATO: si un tenant vencido o en gracia registra una
+ *    tarjeta nueva, se le cobra en ese momento (respetando el máximo de
+ *    un intento por día).
  */
-import { SubscriptionPlan } from '../../../common/enums/index.js';
+import {
+  SubscriptionPlan,
+  SubscriptionStatus,
+} from '../../../common/enums/index.js';
 
 /** Horario permitido para cobros automáticos (hora local del tenant) */
 export const CHARGING_HOURS = {
@@ -329,6 +336,95 @@ export function evaluateRenewalAttempt(params: {
   }
 
   // 6. Ya se intentó hoy (día calendario local del tenant)
+  if (
+    lastRetryDate &&
+    getLocalDateKey(new Date(lastRetryDate), timeZone) ===
+      getLocalDateKey(now, timeZone)
+  ) {
+    return { shouldCharge: false, reason: 'already_attempted_today' };
+  }
+
+  return { shouldCharge: true, reason: 'due' };
+}
+
+/**
+ * Motivo de la decisión de cobro inmediato
+ */
+export type ImmediateChargeReason =
+  | 'due'
+  | 'not_premium'
+  | 'subscription_cancelled'
+  | 'not_overdue'
+  | 'grace_period_expired'
+  | 'already_attempted_today';
+
+export interface ImmediateChargeDecision {
+  shouldCharge: boolean;
+  reason: ImmediateChargeReason;
+}
+
+/**
+ * ¿Hay que cobrar YA, porque el tenant acaba de registrar una tarjeta nueva?
+ *
+ * @description Si un tenant vencido o en gracia actualiza su tarjeta, lo
+ * más probable es que la anterior fuera rechazada. Esperar al siguiente
+ * día del calendario de reintentos lo dejaría días sin pagar teniendo
+ * ya una tarjeta válida. Por eso se le cobra en el momento.
+ *
+ * Diferencias con el cobro automático (evaluateRenewalAttempt):
+ * - NO espera el día del calendario: el tenant actuó, hay que responderle.
+ * - NO exige el horario 8am-8pm: el tenant está despierto y usando el
+ *   sistema; el horario existe para no cobrar mientras duerme.
+ * - NO se limita por la cantidad de intentos: es una tarjeta nueva.
+ * - SÍ respeta el máximo de UN intento por día. Además de evitar alertas
+ *   de fraude del banco, frena el "card testing": alguien que prueba
+ *   tarjetas robadas una tras otra en el formulario de actualizar tarjeta.
+ */
+export function evaluateImmediateCharge(params: {
+  now: Date;
+  plan: string;
+  status: string;
+  autoRenew: boolean;
+  periodEnd: Date;
+  lastRetryDate?: Date | null;
+  graceDays: number;
+  timeZone: string;
+}): ImmediateChargeDecision {
+  const {
+    now,
+    plan,
+    status,
+    autoRenew,
+    periodEnd,
+    lastRetryDate,
+    graceDays,
+    timeZone,
+  } = params;
+
+  // 1. El plan gratuito no tiene nada que cobrar
+  if (plan === (SubscriptionPlan.FREE as string)) {
+    return { shouldCharge: false, reason: 'not_premium' };
+  }
+
+  // 2. Si canceló, el tenant decidió no renovar: no se le cobra
+  if (status === (SubscriptionStatus.CANCELLED as string) || !autoRenew) {
+    return { shouldCharge: false, reason: 'subscription_cancelled' };
+  }
+
+  // 3. Todavía no vence: la tarjeta nueva se usará en la renovación normal
+  if (now.getTime() < periodEnd.getTime()) {
+    return { shouldCharge: false, reason: 'not_overdue' };
+  }
+
+  // 4. Se acabó la gracia (o ya se degradó): debe suscribirse de nuevo
+  if (
+    status === (SubscriptionStatus.EXPIRED as string) ||
+    isGracePeriodExpired(now, periodEnd, graceDays)
+  ) {
+    return { shouldCharge: false, reason: 'grace_period_expired' };
+  }
+
+  // 5. Máximo un intento por día (día calendario local del tenant)
   if (
     lastRetryDate &&
     getLocalDateKey(new Date(lastRetryDate), timeZone) ===

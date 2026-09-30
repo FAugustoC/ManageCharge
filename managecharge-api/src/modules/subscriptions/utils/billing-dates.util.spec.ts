@@ -1,7 +1,11 @@
-import { SubscriptionPlan } from '../../../common/enums/index';
+import {
+  SubscriptionPlan,
+  SubscriptionStatus,
+} from '../../../common/enums/index';
 import {
   addMonthsWithAnchor,
   calculatePeriodEnd,
+  evaluateImmediateCharge,
   evaluateRenewalAttempt,
   getGraceDayNumber,
   getGracePeriodEnd,
@@ -296,6 +300,88 @@ describe('Utilidades de fechas de facturación', () => {
 
     it('funciona con otros calendarios configurados', () => {
       expect(simulate(base.periodEnd, [1, 3, 7], 7)).toEqual([1, 3, 7]);
+    });
+  });
+
+  // ------------------------------------------------------------
+  describe('Cobro inmediato al actualizar la tarjeta', () => {
+    // Venció el 1 de marzo a las 9am GT; 15 días de gracia
+    const base = {
+      plan: SubscriptionPlan.PREMIUM_MONTHLY as string,
+      status: SubscriptionStatus.GRACE_PERIOD as string,
+      autoRenew: true,
+      periodEnd: utc('2026-03-01T15:00:00Z'),
+      lastRetryDate: utc('2026-03-02T16:00:00Z'), // intento del día 2
+      graceDays: 15,
+      timeZone: GT,
+      now: utc('2026-03-03T17:00:00Z'), // día 3, 11am GT
+    };
+
+    it('en gracia y sin intentos hoy → cobra, aunque no sea día del calendario', () => {
+      // El día 3 no está en el calendario [1,2,4,...]: igual se cobra
+      expect(evaluateImmediateCharge(base)).toEqual({
+        shouldCharge: true,
+        reason: 'due',
+      });
+    });
+
+    it('cobra fuera del horario 8am-8pm (el tenant está usando el sistema)', () => {
+      const r = evaluateImmediateCharge({
+        ...base,
+        now: utc('2026-03-04T04:30:00Z'), // 10:30pm GT del día 3
+      });
+      expect(r.shouldCharge).toBe(true);
+    });
+
+    it('vencido pero todavía ACTIVE (el cron aún no intentó) → cobra', () => {
+      const r = evaluateImmediateCharge({
+        ...base,
+        status: SubscriptionStatus.ACTIVE,
+        lastRetryDate: null,
+      });
+      expect(r.shouldCharge).toBe(true);
+    });
+
+    it('máximo un intento por día: si ya se intentó hoy, no cobra', () => {
+      const r = evaluateImmediateCharge({
+        ...base,
+        lastRetryDate: utc('2026-03-03T15:00:00Z'), // hoy 9am GT
+      });
+      expect(r.reason).toBe('already_attempted_today');
+    });
+
+    it('todavía no vence → no cobra (la tarjeta se usará en la renovación)', () => {
+      const r = evaluateImmediateCharge({
+        ...base,
+        status: SubscriptionStatus.ACTIVE,
+        periodEnd: utc('2026-03-20T15:00:00Z'),
+      });
+      expect(r.reason).toBe('not_overdue');
+    });
+
+    it('gracia vencida → no cobra', () => {
+      const r = evaluateImmediateCharge({
+        ...base,
+        now: utc('2026-03-16T15:00:00Z'), // 15 días exactos
+      });
+      expect(r.reason).toBe('grace_period_expired');
+    });
+
+    it('suscripción cancelada → no cobra', () => {
+      const r = evaluateImmediateCharge({
+        ...base,
+        status: SubscriptionStatus.CANCELLED,
+        autoRenew: false,
+      });
+      expect(r.reason).toBe('subscription_cancelled');
+    });
+
+    it('plan FREE → no cobra', () => {
+      const r = evaluateImmediateCharge({
+        ...base,
+        plan: SubscriptionPlan.FREE,
+      });
+      expect(r.reason).toBe('not_premium');
     });
   });
 });

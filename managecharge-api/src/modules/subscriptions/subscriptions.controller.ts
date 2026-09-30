@@ -272,11 +272,17 @@ export class SubscriptionsController {
     summary: 'Actualizar método de pago',
     description:
       'Reemplaza la tarjeta guardada con una nueva. ' +
-      'Útil cuando la tarjeta expira o es rechazada.',
+      'Útil cuando la tarjeta expira o es rechazada. ' +
+      'Si la suscripción está vencida o en período de gracia, se cobra ' +
+      'de inmediato con la tarjeta nueva (máximo un intento por día). ' +
+      'El resultado del cobro viene en data.immediateCharge.',
   })
   @ApiResponse({
     status: 200,
-    description: 'Método de pago actualizado exitosamente',
+    description:
+      'Tarjeta actualizada. data.immediateCharge indica si se intentó ' +
+      'cobrar (attempted), si fue exitoso (success), el motivo (reason) ' +
+      'y un mensaje para mostrar al tenant (message).',
   })
   @ApiResponse({
     status: 400,

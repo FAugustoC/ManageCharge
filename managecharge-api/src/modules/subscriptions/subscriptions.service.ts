@@ -49,15 +49,49 @@ import { getErrorMessage, getErrorStack } from '../../common/utils/index.js';
 // Reglas de fechas de facturación (funciones puras con pruebas propias)
 import {
     calculatePeriodEnd,
+    evaluateImmediateCharge,
     evaluateRenewalAttempt,
     getGraceCutoff,
     getGracePeriodEnd,
     isValidTimeZone,
     resolveNewPeriodStart,
 } from './utils/index.js';
+import type { ImmediateChargeReason } from './utils/index.js';
 
 // Providers
 import { StripeProvider } from '../../common/providers/payment/index.js';
+
+/**
+ * Resultado del cobro inmediato al actualizar la tarjeta
+ *
+ * @description Se devuelve al frontend para que le explique al tenant
+ * qué pasó con su pago, además de confirmar que la tarjeta se guardó.
+ */
+export interface ImmediateChargeResult {
+    /** ¿Se intentó cobrar? */
+    attempted: boolean;
+    /** ¿El cobro fue exitoso? */
+    success: boolean;
+    /** Motivo: por qué no se cobró, o el resultado del cobro */
+    reason: ImmediateChargeReason | 'charged' | 'declined' | 'concurrent_attempt';
+    /** Mensaje para mostrar al tenant */
+    message: string;
+}
+
+/** Mensajes para el tenant cuando NO se intenta el cobro inmediato */
+const IMMEDIATE_CHARGE_SKIPPED_MESSAGES: Record<
+    Exclude<ImmediateChargeReason, 'due'>,
+    string
+> = {
+    not_premium: 'No hay cobros pendientes.',
+    subscription_cancelled:
+        'Tu suscripción está cancelada, así que no se realizó ningún cobro.',
+    not_overdue: 'La nueva tarjeta se usará en tu próxima renovación.',
+    grace_period_expired:
+        'Tu período de gracia terminó. Suscríbete de nuevo para recuperar premium.',
+    already_attempted_today:
+        'Ya intentamos un cobro hoy. Lo intentaremos de nuevo con tu nueva tarjeta en el próximo intento programado.',
+};
 
 /**
  * SubscriptionsService
@@ -575,6 +609,11 @@ export class SubscriptionsService {
     /**
      * Actualizar método de pago
      *
+     * @description Si el tenant está vencido o en período de gracia,
+     * además se le cobra de inmediato con la tarjeta nueva
+     * (ver chargeAfterPaymentMethodUpdate). Si el cobro falla, la tarjeta
+     * queda guardada igual y el resultado se informa en immediateCharge.
+     *
      * @param tenantId - ID del tenant autenticado
      * @param updateDto - Token del nuevo método de pago
      * @returns Confirmación de actualización
@@ -641,6 +680,12 @@ export class SubscriptionsService {
             `Método de pago actualizado para tenant ${tenantId}`,
         );
 
+        // Si estaba vencido o en gracia, cobrar ya con la tarjeta nueva
+        const immediateCharge = await this.chargeAfterPaymentMethodUpdate(
+            tenant,
+            newPaymentMethodInfo,
+        );
+
         return {
             success: true,
             last4: newPaymentMethodInfo.last4,
@@ -648,6 +693,7 @@ export class SubscriptionsService {
             expiryMonth: newPaymentMethodInfo.expiryMonth,
             expiryYear: newPaymentMethodInfo.expiryYear,
             message: 'Método de pago actualizado exitosamente',
+            immediateCharge,
         };
     }
 
@@ -1149,6 +1195,16 @@ export class SubscriptionsService {
 
         const retryAttempt = (tenant.subscription.retryAttempts || 0) + 1;
 
+        // Reservar el intento: si otro proceso (por ejemplo, el cobro
+        // inmediato al actualizar la tarjeta) cobró en este instante, se
+        // omite para no cobrar dos veces.
+        if (!(await this.claimChargeAttempt(tenant, new Date()))) {
+            this.logger.warn(
+                `Tenant ${tenantId}: otro proceso acaba de intentar el cobro, se omite`,
+            );
+            return;
+        }
+
         this.logger.log(
             `Intentando renovación #${retryAttempt} para tenant ${tenantId}`,
         );
@@ -1226,6 +1282,204 @@ export class SubscriptionsService {
                 `❌ Renovación fallida (intento ${retryAttempt}/${maxAttempts}) para tenant ${tenantId}: ${chargeResult.errorMessage}`,
             );
         }
+    }
+
+    /**
+     * Reservar un intento de cobro (evita cobrar dos veces)
+     *
+     * @description Marca lastRetryDate = ahora SOLO si nadie lo cambió
+     * desde que leímos al tenant. MongoDB hace la comparación y la
+     * escritura en una sola operación atómica, así que si el cron y el
+     * cobro inmediato llegan al mismo tiempo, solo uno gana; el otro
+     * recibe null y no cobra.
+     *
+     * @returns true si se reservó el intento
+     */
+    private async claimChargeAttempt(
+        tenant: TenantDocument,
+        now: Date,
+    ): Promise<boolean> {
+        const claimed = await this.tenantModel.findOneAndUpdate(
+            {
+                _id: tenant._id,
+                'subscription.currentPeriodEnd': tenant.subscription.currentPeriodEnd,
+                // null también coincide con "el campo no existe"
+                'subscription.lastRetryDate': tenant.subscription.lastRetryDate ?? null,
+            },
+            { $set: { 'subscription.lastRetryDate': now } },
+        );
+        return claimed !== null;
+    }
+
+    /**
+     * Cobro inmediato al actualizar la tarjeta
+     *
+     * @description Si el tenant está vencido o en gracia, se le cobra
+     * en el momento con su tarjeta nueva, sin esperar el siguiente día
+     * del calendario de reintentos. Las reglas están en
+     * evaluateImmediateCharge() (máximo un intento por día, etc.).
+     *
+     * - Éxito: renueva con las reglas de siempre (período continuo, día
+     *   ancla) y registra la transacción.
+     * - Rechazo: pasa a gracia (si no lo estaba) y registra el intento.
+     *   NO consume un día del calendario de reintentos: el cron sigue su
+     *   calendario normal, pero no volverá a cobrar hoy.
+     */
+    private async chargeAfterPaymentMethodUpdate(
+        tenant: TenantDocument,
+        paymentMethod: PaymentMethodInfo,
+    ): Promise<ImmediateChargeResult> {
+        const tenantId = tenant._id.toString();
+        const subscription = tenant.subscription;
+        const now = new Date();
+
+        const decision = evaluateImmediateCharge({
+            now,
+            plan: subscription.plan,
+            status: subscription.status,
+            autoRenew: subscription.autoRenew,
+            periodEnd: new Date(subscription.currentPeriodEnd),
+            lastRetryDate: subscription.lastRetryDate,
+            graceDays: this.gracePeriodDays,
+            timeZone: this.resolveTenantTimeZone(tenant),
+        });
+
+        if (decision.reason !== 'due') {
+            this.logger.debug(
+                `Tenant ${tenantId}: sin cobro inmediato (${decision.reason})`,
+            );
+            return {
+                attempted: false,
+                success: false,
+                reason: decision.reason,
+                message: IMMEDIATE_CHARGE_SKIPPED_MESSAGES[decision.reason],
+            };
+        }
+
+        if (!(await this.claimChargeAttempt(tenant, now))) {
+            this.logger.warn(
+                `Tenant ${tenantId}: cobro inmediato omitido, otro proceso está cobrando`,
+            );
+            return {
+                attempted: false,
+                success: false,
+                reason: 'concurrent_attempt',
+                message: 'Ya hay un cobro en proceso. Revisa el estado de tu suscripción en unos minutos.',
+            };
+        }
+
+        const cardLabel =
+            `${paymentMethod.brand} ****${paymentMethod.last4}, ` +
+            `vence ${paymentMethod.expiryMonth}/${paymentMethod.expiryYear}`;
+
+        this.logger.log(
+            `💳 Cobro inmediato para tenant ${tenantId} (${tenant.email}) ` +
+            `con su nueva tarjeta (${cardLabel}): ` +
+            `${subscription.amount} ${subscription.currency}`,
+        );
+
+        const chargeResult = await this.stripeProvider.charge({
+            customerId: paymentMethod.customerId,
+            paymentMethodId: paymentMethod.paymentMethodId,
+            amount: subscription.amount,
+            currency: subscription.currency,
+            description: 'ManageCharge - Renovación (tarjeta actualizada)',
+            metadata: {
+                tenantId,
+                type: 'renewal',
+                trigger: 'payment_method_updated',
+            },
+        });
+
+        const isRetry = subscription.status === SubscriptionStatus.GRACE_PERIOD;
+        const transactionMetadata = {
+            initiatedBy: 'tenant',
+            reason: 'Cobro inmediato al actualizar la tarjeta',
+        };
+
+        if (chargeResult.success) {
+            // Renovación protegida: si el período ya cambió, este cobro sobra
+            const renewed = await this.renewSubscription(
+                tenant,
+                chargeResult.transactionId!,
+                { onlyIfPeriodEnd: new Date(subscription.currentPeriodEnd) },
+            );
+
+            await this.createTransaction({
+                tenantId,
+                type: TransactionType.RENEWAL,
+                plan: subscription.plan,
+                amount: subscription.amount,
+                currency: subscription.currency,
+                status: TransactionStatus.SUCCESS,
+                provider: paymentMethod.provider,
+                providerTransactionId: chargeResult.transactionId,
+                providerCustomerId: paymentMethod.customerId,
+                isRetry,
+                possibleDuplicate: !renewed,
+                requiresReview: !renewed,
+                reviewReason: renewed
+                    ? undefined
+                    : 'Posible doble cobro: la suscripción ya se había renovado',
+                metadata: transactionMetadata,
+            });
+
+            if (!renewed) {
+                this.logger.error(
+                    `🚨 [ALERTA ADMIN] Posible doble cobro: Tenant ${tenantId} (${tenant.email}), ` +
+                    `transacción ${chargeResult.transactionId} por ${subscription.amount} ` +
+                    `${subscription.currency} (${cardLabel}). La suscripción ya se había renovado. ` +
+                    'Revisar y reembolsar si corresponde.',
+                );
+            } else {
+                this.logger.log(
+                    `✅ Cobro inmediato exitoso para tenant ${tenantId}: suscripción renovada`,
+                );
+            }
+
+            return {
+                attempted: true,
+                success: true,
+                reason: 'charged',
+                message: 'Pago procesado. Tu suscripción premium está al día.',
+            };
+        }
+
+        // Rechazo: queda en gracia; lastRetryDate ya quedó en "hoy" al
+        // reservar el intento, así que el cron no reintentará hoy
+        await this.tenantModel.findByIdAndUpdate(tenant._id, {
+            $set: { 'subscription.status': SubscriptionStatus.GRACE_PERIOD },
+        });
+
+        await this.createTransaction({
+            tenantId,
+            type: TransactionType.RENEWAL,
+            plan: subscription.plan,
+            amount: subscription.amount,
+            currency: subscription.currency,
+            status: TransactionStatus.FAILED,
+            provider: paymentMethod.provider,
+            providerTransactionId: chargeResult.transactionId,
+            providerCustomerId: paymentMethod.customerId,
+            errorCode: chargeResult.errorCode,
+            errorMessage: chargeResult.errorMessage,
+            isRetry,
+            metadata: transactionMetadata,
+        });
+
+        this.logger.warn(
+            `❌ Cobro inmediato rechazado para tenant ${tenantId} (${tenant.email}, ` +
+            `${cardLabel}): ${chargeResult.errorMessage}`,
+        );
+
+        return {
+            attempted: true,
+            success: false,
+            reason: 'declined',
+            message:
+                `Tu tarjeta se guardó, pero el cobro fue rechazado: ${chargeResult.errorMessage}. ` +
+                'Lo intentaremos de nuevo en el próximo intento programado.',
+        };
     }
 
     /**

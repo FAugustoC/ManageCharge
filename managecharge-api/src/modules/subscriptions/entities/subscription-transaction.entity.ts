@@ -185,7 +185,7 @@ export class SubscriptionTransaction {
    */
   @Prop({ type: Object })
   metadata?: {
-    initiatedBy?: 'system' | 'super_admin'; // Quién inició el cobro
+    initiatedBy?: 'system' | 'super_admin' | 'tenant'; // Quién inició el cobro
     superAdminId?: string; // ID del super admin (si es manual)
     reason?: string; // Razón del cobro manual
     ipAddress?: string; // IP desde donde se inició

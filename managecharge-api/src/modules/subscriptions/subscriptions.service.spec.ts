@@ -61,6 +61,8 @@ describe('SubscriptionsService - reglas de facturación', () => {
     tenantModel = {
       findById: jest.fn(),
       findByIdAndUpdate: jest.fn().mockResolvedValue({}),
+      // Reserva atómica del intento de cobro: por defecto se obtiene
+      findOneAndUpdate: jest.fn().mockResolvedValue({}),
       find: jest.fn().mockImplementation(() => ({
         exec: jest.fn().mockResolvedValue(findResults.shift() ?? []),
       })),
@@ -83,6 +85,7 @@ describe('SubscriptionsService - reglas de facturación', () => {
         expiryYear: 2030,
       }),
       charge: jest.fn().mockResolvedValue({ success: true, transactionId: 'pi_1' }),
+      detachPaymentMethod: jest.fn().mockResolvedValue(undefined),
     };
 
     const config: Record<string, unknown> = {
@@ -312,6 +315,162 @@ describe('SubscriptionsService - reglas de facturación', () => {
       });
 
       expect(renewed).toBe(false);
+    });
+  });
+
+  // ------------------------------------------------------------
+  describe('updatePaymentMethod() con cobro inmediato', () => {
+    const oldEnd = new Date('2026-03-01T15:00:00Z');
+    // Día 3 de gracia, 11am en Guatemala
+    const NOW = new Date('2026-03-03T17:00:00Z');
+
+    /** Tenant en gracia: la renovación del día 2 fue rechazada */
+    const tenantInGrace = (overrides: Record<string, unknown> = {}) =>
+      makeTenant({
+        status: SubscriptionStatus.GRACE_PERIOD,
+        retryAttempts: 2,
+        lastRetryDate: new Date('2026-03-02T16:00:00Z'),
+        startDate: new Date('2026-01-01T15:00:00Z'),
+        currentPeriodStart: new Date('2026-02-01T15:00:00Z'),
+        currentPeriodEnd: oldEnd,
+        ...overrides,
+      });
+
+    const givenTenant = (tenant: ReturnType<typeof makeTenant>) =>
+      tenantModel.findById.mockReturnValue({
+        exec: () => Promise.resolve(tenant),
+      });
+
+    const update = () =>
+      service.updatePaymentMethod('tenant-id', { paymentMethodToken: 'tok_new' });
+
+    /** Datos de la transacción que el servicio registró */
+    let createTransaction: jest.SpyInstance;
+    beforeEach(() => {
+      jest.useFakeTimers().setSystemTime(NOW);
+      createTransaction = jest.spyOn(service, 'createTransaction');
+    });
+    const recorded = () =>
+      createTransaction.mock.calls[0][0] as Record<string, unknown>;
+
+    it('en gracia → cobra YA con la tarjeta nueva y renueva desde el vencimiento', async () => {
+      givenTenant(tenantInGrace());
+
+      const result = await update();
+
+      // Se cobra con la tarjeta NUEVA, no con la que falló
+      expect(stripeProvider.charge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          paymentMethodId: 'pm_new',
+          amount: 100,
+          currency: 'GTQ',
+          metadata: expect.objectContaining({
+            type: 'renewal',
+            trigger: 'payment_method_updated',
+          }) as object,
+        }),
+      );
+      // Renovación protegida y con período continuo
+      const [filter, renewal] = tenantModel.findOneAndUpdate.mock.calls[1];
+      expect(filter['subscription.currentPeriodEnd']).toEqual(oldEnd);
+      expect(renewal.$set['subscription.currentPeriodStart']).toEqual(oldEnd);
+
+      expect(recorded()).toEqual(
+        expect.objectContaining({
+          status: 'success',
+          providerTransactionId: 'pi_1',
+          isRetry: true,
+          possibleDuplicate: false,
+          metadata: expect.objectContaining({ initiatedBy: 'tenant' }) as object,
+        }),
+      );
+      expect(result.immediateCharge).toEqual(
+        expect.objectContaining({ attempted: true, success: true, reason: 'charged' }),
+      );
+    });
+
+    it('reserva el intento de forma atómica antes de cobrar (lastRetryDate = ahora)', async () => {
+      const lastRetryDate = new Date('2026-03-02T16:00:00Z');
+      givenTenant(tenantInGrace({ lastRetryDate }));
+
+      await update();
+
+      // Solo reserva si lastRetryDate sigue siendo el que se leyó
+      const [filter, claim] = tenantModel.findOneAndUpdate.mock.calls[0];
+      expect(filter['subscription.lastRetryDate']).toEqual(lastRetryDate);
+      expect(claim.$set['subscription.lastRetryDate']).toEqual(NOW);
+    });
+
+    it('rechazo → la tarjeta queda guardada, sigue en gracia y NO consume un día del calendario', async () => {
+      givenTenant(tenantInGrace());
+      stripeProvider.charge.mockResolvedValue({
+        success: false,
+        transactionId: 'pi_failed',
+        errorCode: 'card_declined',
+        errorMessage: 'Your card was declined.',
+      });
+
+      const result = await update();
+
+      expect(result.success).toBe(true); // la tarjeta sí se actualizó
+      expect(result.immediateCharge).toEqual(
+        expect.objectContaining({ attempted: true, success: false, reason: 'declined' }),
+      );
+      const statusUpdate = tenantModel.findByIdAndUpdate.mock.calls.at(-1)[1].$set;
+      expect(statusUpdate).toEqual({
+        'subscription.status': SubscriptionStatus.GRACE_PERIOD,
+      });
+      // retryAttempts no se toca: el calendario de reintentos sigue igual
+      expect(statusUpdate['subscription.retryAttempts']).toBeUndefined();
+      expect(recorded()).toEqual(
+        expect.objectContaining({
+          status: 'failed',
+          providerTransactionId: 'pi_failed',
+          errorCode: 'card_declined',
+        }),
+      );
+    });
+
+    it('si ya se intentó cobrar hoy, solo guarda la tarjeta (máximo un intento por día)', async () => {
+      givenTenant(tenantInGrace({ lastRetryDate: new Date('2026-03-03T15:00:00Z') }));
+
+      const result = await update();
+
+      expect(stripeProvider.charge).not.toHaveBeenCalled();
+      expect(result.immediateCharge).toEqual(
+        expect.objectContaining({ attempted: false, reason: 'already_attempted_today' }),
+      );
+    });
+
+    it('si todavía no vence, solo guarda la tarjeta', async () => {
+      givenTenant(
+        makeTenant({ currentPeriodEnd: new Date('2026-03-20T15:00:00Z') }),
+      );
+
+      const result = await update();
+
+      expect(stripeProvider.charge).not.toHaveBeenCalled();
+      expect(result.immediateCharge?.reason).toBe('not_overdue');
+    });
+
+    it('si otro proceso ganó la reserva (el cron), no cobra dos veces', async () => {
+      givenTenant(tenantInGrace());
+      tenantModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      const result = await update();
+
+      expect(stripeProvider.charge).not.toHaveBeenCalled();
+      expect(result.immediateCharge?.reason).toBe('concurrent_attempt');
+    });
+
+    it('el cron tampoco cobra si otro proceso ganó la reserva', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-03-04T15:00:00Z')); // día 4, 9am GT
+      findResults.push([tenantInGrace()]);
+      tenantModel.findOneAndUpdate.mockResolvedValueOnce(null);
+
+      await service.processRenewalAttempts();
+
+      expect(stripeProvider.charge).not.toHaveBeenCalled();
     });
   });
 });
