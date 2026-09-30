@@ -211,6 +211,7 @@ export class StripeProvider implements IPaymentProvider {
         );
         return {
           success: false,
+          transactionId: paymentIntent.id,
           errorCode: 'unexpected_status',
           errorMessage: `Payment status: ${paymentIntent.status}`,
         };
@@ -222,6 +223,9 @@ export class StripeProvider implements IPaymentProvider {
       if (error instanceof Stripe.errors.StripeError) {
         return {
           success: false,
+          // Si la tarjeta fue rechazada, Stripe igual creó el PaymentIntent.
+          // Guardar su ID permite relacionarlo después con los webhooks.
+          transactionId: error.payment_intent?.id,
           errorCode: error.code || 'stripe_error',
           errorMessage: error.message,
         };

@@ -277,4 +277,41 @@ describe('SubscriptionsService - reglas de facturación', () => {
       expect($set['subscription.plan']).toBe(SubscriptionPlan.FREE);
     });
   });
+
+  // ------------------------------------------------------------
+  describe('renewSubscription() protegida (la usan los webhooks)', () => {
+    const periodEnd = new Date('2026-03-01T15:00:00Z');
+    const tenant = () =>
+      makeTenant({
+        status: SubscriptionStatus.GRACE_PERIOD,
+        startDate: new Date('2026-01-01T15:00:00Z'),
+        currentPeriodStart: new Date('2026-02-01T15:00:00Z'),
+        currentPeriodEnd: periodEnd,
+      });
+
+    it('solo renueva si el período sigue terminando en la fecha leída', async () => {
+      tenantModel.findOneAndUpdate = jest.fn().mockResolvedValue({});
+
+      const renewed = await service.renewSubscription(tenant() as never, 'pi_1', {
+        onlyIfPeriodEnd: periodEnd,
+      });
+
+      expect(renewed).toBe(true);
+      const [filter, update] = tenantModel.findOneAndUpdate.mock.calls[0];
+      expect(filter['subscription.currentPeriodEnd']).toEqual(periodEnd);
+      // El nuevo período empieza en el vencimiento anterior (regla de siempre)
+      expect(update.$set['subscription.currentPeriodStart']).toEqual(periodEnd);
+      expect(tenantModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('si otro proceso ya renovó (no encuentra el período), no renueva otra vez', async () => {
+      tenantModel.findOneAndUpdate = jest.fn().mockResolvedValue(null);
+
+      const renewed = await service.renewSubscription(tenant() as never, 'pi_1', {
+        onlyIfPeriodEnd: periodEnd,
+      });
+
+      expect(renewed).toBe(false);
+    });
+  });
 });

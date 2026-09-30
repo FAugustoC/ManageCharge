@@ -9,6 +9,7 @@ import { Model } from 'mongoose';
 
 import { WebhooksService } from './webhooks.service';
 import { WebhookEventDocument } from './entities/index';
+import { SubscriptionsWebhookHandler } from '../subscriptions/index';
 import {
   PaymentProvider,
   WebhookEventStatus,
@@ -21,6 +22,7 @@ import type {
 import {
   InvalidWebhookSignatureError,
   WebhookNotConfiguredError,
+  WebhookRetryLaterError,
 } from '../../common/providers/webhooks/index';
 
 /**
@@ -31,6 +33,7 @@ import {
  * - Cada evento se procesa UNA sola vez (idempotencia)
  * - Un evento que falló se puede reintentar
  * - Los errores se traducen al código HTTP correcto para el proveedor
+ * - Cada tipo de evento llega a su regla de negocio
  *
  * Ejecutar: npm test -- webhooks.service
  */
@@ -61,6 +64,7 @@ describe('WebhooksService', () => {
   let service: WebhooksService;
   let adapter: { provider: PaymentProvider; parseEvent: jest.Mock };
   let model: Record<string, jest.Mock>;
+  let handler: Record<string, jest.Mock>;
 
   beforeEach(() => {
     adapter = {
@@ -75,9 +79,20 @@ describe('WebhooksService', () => {
       updateOne: jest.fn().mockResolvedValue({}),
     };
 
+    // Reglas de negocio simuladas: por defecto "se aplicó una acción"
+    handler = {
+      handlePaymentSucceeded: jest.fn().mockResolvedValue(true),
+      handlePaymentFailed: jest.fn().mockResolvedValue(false),
+      handlePaymentRefunded: jest.fn().mockResolvedValue(true),
+      handlePaymentDisputed: jest.fn().mockResolvedValue(true),
+      handlePaymentMethodUpdated: jest.fn().mockResolvedValue(true),
+      handlePaymentMethodDetached: jest.fn().mockResolvedValue(true),
+    };
+
     service = new WebhooksService(
       model as unknown as Model<WebhookEventDocument>,
       [adapter as IWebhookAdapter],
+      handler as unknown as SubscriptionsWebhookHandler,
     );
   });
 
@@ -134,14 +149,23 @@ describe('WebhooksService', () => {
           status: WebhookEventStatus.PROCESSING,
         }),
       );
-      // Fase 02: sin reglas de negocio todavía → "ignored"
-      expect(finalStatus()).toBe(WebhookEventStatus.IGNORED);
+      // La regla de negocio aplicó una acción → "processed"
+      expect(finalStatus()).toBe(WebhookEventStatus.PROCESSED);
     });
 
     it('un evento sin interés (type null) se marca como ignorado', async () => {
       adapter.parseEvent.mockReturnValue(
         makeEvent({ type: null, originalType: 'customer.created', data: {} }),
       );
+
+      await service.handle('stripe', REQUEST);
+
+      expect(finalStatus()).toBe(WebhookEventStatus.IGNORED);
+      expect(handler.handlePaymentSucceeded).not.toHaveBeenCalled();
+    });
+
+    it('si la regla no requirió acción, el evento queda como ignorado', async () => {
+      handler.handlePaymentSucceeded.mockResolvedValue(false);
 
       await service.handle('stripe', REQUEST);
 
@@ -156,6 +180,7 @@ describe('WebhooksService', () => {
 
       expect(result).toEqual({ received: true, duplicate: true });
       expect(model.updateOne).not.toHaveBeenCalled();
+      expect(handler.handlePaymentSucceeded).not.toHaveBeenCalled();
     });
 
     it('un evento que falló antes se retoma y suma un intento', async () => {
@@ -170,7 +195,7 @@ describe('WebhooksService', () => {
         expect.objectContaining({ $inc: { attempts: 1 } }),
         { new: true },
       );
-      expect(finalStatus()).toBe(WebhookEventStatus.IGNORED);
+      expect(finalStatus()).toBe(WebhookEventStatus.PROCESSED);
     });
 
     it('responde 409 si otra petición lo está procesando ahora mismo', async () => {
@@ -194,14 +219,51 @@ describe('WebhooksService', () => {
     });
   });
 
+  describe('despacho a las reglas de negocio', () => {
+    it.each([
+      [WebhookEventType.PAYMENT_SUCCEEDED, 'handlePaymentSucceeded'],
+      [WebhookEventType.PAYMENT_FAILED, 'handlePaymentFailed'],
+      [WebhookEventType.PAYMENT_REFUNDED, 'handlePaymentRefunded'],
+      [WebhookEventType.PAYMENT_DISPUTED, 'handlePaymentDisputed'],
+      [WebhookEventType.PAYMENT_METHOD_UPDATED, 'handlePaymentMethodUpdated'],
+      [WebhookEventType.PAYMENT_METHOD_DETACHED, 'handlePaymentMethodDetached'],
+    ])('%s → %s', async (type, method) => {
+      const event = makeEvent({ type });
+      adapter.parseEvent.mockReturnValue(event);
+
+      await service.handle('stripe', REQUEST);
+
+      expect(handler[method]).toHaveBeenCalledWith(event);
+      // Ninguna otra regla se ejecuta
+      const others = Object.keys(handler).filter((name) => name !== method);
+      others.forEach((name) => expect(handler[name]).not.toHaveBeenCalled());
+    });
+  });
+
   describe('errores al procesar', () => {
+    it('si la regla pide esperar, marca FAILED y responde 409 (sin ERROR en logs)', async () => {
+      handler.handlePaymentSucceeded.mockRejectedValue(
+        new WebhookRetryLaterError('Cobro aún sin registro local'),
+      );
+
+      await expect(service.handle('stripe', REQUEST)).rejects.toThrow(
+        ConflictException,
+      );
+      expect(model.updateOne).toHaveBeenCalledWith(
+        { provider: 'stripe', eventId: 'evt_1' },
+        {
+          $set: {
+            status: WebhookEventStatus.FAILED,
+            lastError: 'Cobro aún sin registro local',
+          },
+        },
+      );
+    });
+
     it('si la regla de negocio falla, marca FAILED y responde 500 para que se reintente', async () => {
-      jest
-        .spyOn(
-          service as unknown as { dispatch: () => Promise<boolean> },
-          'dispatch',
-        )
-        .mockRejectedValue(new Error('Tenant no encontrado'));
+      handler.handlePaymentSucceeded.mockRejectedValue(
+        new Error('Tenant no encontrado'),
+      );
 
       await expect(service.handle('stripe', REQUEST)).rejects.toThrow(
         InternalServerErrorException,

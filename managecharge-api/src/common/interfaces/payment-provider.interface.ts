@@ -56,7 +56,7 @@ export interface ChargeDto {
  */
 export interface ChargeResult {
   success: boolean;
-  transactionId?: string; // ID del cobro en el proveedor
+  transactionId?: string; // ID del cobro en el proveedor (también si falló, cuando existe)
   errorCode?: string; // Código de error si falló
   errorMessage?: string; // Mensaje de error legible
 }

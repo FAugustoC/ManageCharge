@@ -13,6 +13,7 @@ import { WebhookEvent } from './entities/index';
 import { WEBHOOK_ADAPTERS } from '../../common/index';
 import { StripeWebhookAdapter } from '../../common/providers/webhooks/index';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { SubscriptionsWebhookHandler } from '../subscriptions/index';
 
 /**
  * Prueba HTTP del endpoint de webhooks (de punta a punta, sin MongoDB)
@@ -61,6 +62,13 @@ describe('POST /webhooks/:provider', () => {
           },
         },
         { provide: APP_GUARD, useClass: JwtAuthGuard },
+        // Las reglas de negocio se prueban aparte; aquí solo el HTTP
+        {
+          provide: SubscriptionsWebhookHandler,
+          useValue: {
+            handlePaymentSucceeded: jest.fn().mockResolvedValue(true),
+          },
+        },
       ],
     }).compile();
 

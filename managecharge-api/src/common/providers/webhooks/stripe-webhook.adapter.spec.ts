@@ -158,6 +158,8 @@ describe('StripeWebhookAdapter', () => {
         currency: 'USD',
         errorCode: undefined,
         errorMessage: undefined,
+        // La metadata que ManageCharge adjuntó al cobro viaja completa
+        metadata: { tenantId: 'tenant_1', plan: 'premium_monthly' },
       });
     });
 

@@ -14,6 +14,8 @@ export * from './subscriptions.service.js';
 export * from './subscriptions.controller.js';
 // Scheduler
 export * from './subscriptions.scheduler.js';
+// Reglas de negocio de webhooks
+export * from './subscriptions.webhook-handler.js';
 // Entidades
 export * from './entities/index.js';
 // DTOs

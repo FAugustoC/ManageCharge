@@ -134,6 +134,51 @@ export class SubscriptionTransaction {
   retryAttempt?: number;
 
   /**
+   * Monto reembolsado acumulado (unidades completas)
+   *
+   * @description Lo actualiza el webhook de reembolso. Si llega a ser
+   * igual al monto de la transacción, el status pasa a 'refunded'.
+   */
+  @Prop()
+  refundedAmount?: number;
+
+  /**
+   * Fecha en que el cliente abrió una disputa (contracargo)
+   */
+  @Prop()
+  disputedAt?: Date;
+
+  /**
+   * Motivo de la disputa según el proveedor
+   * @example 'fraudulent', 'duplicate', 'product_not_received'
+   */
+  @Prop()
+  disputeReason?: string;
+
+  /**
+   * Posible doble cobro
+   *
+   * @description true si el proveedor cobró, pero el tenant ya tenía su
+   * período pagado. Este cobro NO extendió la suscripción y debe
+   * revisarse (reembolsar o, en el futuro, acreditar a su saldo).
+   * Si se reembolsa o se disputa, NO se degrada al tenant.
+   */
+  @Prop({ default: false })
+  possibleDuplicate: boolean;
+
+  /**
+   * ¿Requiere revisión de un administrador?
+   */
+  @Prop({ default: false })
+  requiresReview: boolean;
+
+  /**
+   * Por qué requiere revisión
+   */
+  @Prop()
+  reviewReason?: string;
+
+  /**
    * Metadata adicional
    * 
    * @description Información contextual de la transacción
@@ -181,6 +226,9 @@ SubscriptionTransactionSchema.index({ status: 1, type: 1 });
 
 // Buscar por ID de proveedor
 SubscriptionTransactionSchema.index({ providerTransactionId: 1 });
+
+// Transacciones pendientes de revisión (panel de super admin)
+SubscriptionTransactionSchema.index({ requiresReview: 1, createdAt: -1 });
 
 // Analizar reintentos
 SubscriptionTransactionSchema.index({ isRetry: 1, retryAttempt: 1 });

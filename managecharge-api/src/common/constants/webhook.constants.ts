@@ -23,3 +23,14 @@ export const WEBHOOK_STALE_PROCESSING_MS = 5 * 60 * 1000;
 
 /** Días que se conservan los registros de webhooks antes de borrarse solos */
 export const WEBHOOK_EVENT_RETENTION_DAYS = 90;
+
+/**
+ * Antigüedad mínima para considerar "huérfano" un cobro exitoso
+ *
+ * @description Cuando ManageCharge cobra, Stripe envía el webhook casi
+ * al mismo tiempo en que nuestro código está guardando la transacción.
+ * Si el webhook llega primero, parecería un cobro sin registro. Por eso,
+ * si el cobro tiene menos de este tiempo, se pide a Stripe que lo
+ * reenvíe más tarde; para entonces el flujo normal ya lo habrá guardado.
+ */
+export const WEBHOOK_ORPHAN_PAYMENT_MIN_AGE_MS = 10 * 60 * 1000;

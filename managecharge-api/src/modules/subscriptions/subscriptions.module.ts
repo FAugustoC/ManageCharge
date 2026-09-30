@@ -8,6 +8,7 @@ import { ConfigModule } from '@nestjs/config';
 import { SubscriptionsController } from './subscriptions.controller.js';
 import { SubscriptionsService } from './subscriptions.service.js';
 import { SubscriptionsScheduler } from './subscriptions.scheduler.js';
+import { SubscriptionsWebhookHandler } from './subscriptions.webhook-handler.js';
 
 // Entities
 import { Tenant, TenantSchema } from '../tenants/index.js';
@@ -28,6 +29,7 @@ import { StripeProvider } from '../../common/providers/payment/index.js';
  * - Renovación automática
  * - Gestión de pagos
  * - Downgrade automático
+ * - Reglas de negocio de los webhooks de pago
  */
 @Module({
   imports: [
@@ -50,10 +52,12 @@ import { StripeProvider } from '../../common/providers/payment/index.js';
   providers: [
     SubscriptionsService,
     SubscriptionsScheduler,
+    SubscriptionsWebhookHandler, // Reglas de negocio de los webhooks
     StripeProvider, // Provider de Stripe
   ],
   exports: [
     SubscriptionsService, // Exportar para uso en otros módulos
+    SubscriptionsWebhookHandler, // Lo usa WebhooksModule
   ],
 })
 export class SubscriptionsModule {}

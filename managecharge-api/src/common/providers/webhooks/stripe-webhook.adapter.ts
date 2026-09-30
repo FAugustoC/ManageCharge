@@ -121,6 +121,7 @@ export class StripeWebhookAdapter implements IWebhookAdapter {
             currency: intent.currency.toUpperCase(),
             errorCode: lastError?.decline_code ?? lastError?.code,
             errorMessage: lastError?.message,
+            metadata: { ...intent.metadata },
           },
         };
       }

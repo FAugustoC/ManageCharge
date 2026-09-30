@@ -7,6 +7,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { WebhooksController } from './webhooks.controller.js';
 import { WebhooksService } from './webhooks.service.js';
 import { WebhookEvent, WebhookEventSchema } from './entities/index.js';
+import { SubscriptionsModule } from '../subscriptions/index.js';
 import { WEBHOOK_ADAPTERS } from '../../common/index.js';
 import type { IWebhookAdapter } from '../../common/index.js';
 import { StripeWebhookAdapter } from '../../common/providers/webhooks/index.js';
@@ -26,6 +27,8 @@ import { StripeWebhookAdapter } from '../../common/providers/webhooks/index.js';
       { name: WebhookEvent.name, schema: WebhookEventSchema },
     ]),
     ConfigModule,
+    // Aporta SubscriptionsWebhookHandler (las reglas de negocio)
+    SubscriptionsModule,
   ],
   controllers: [WebhooksController],
   providers: [

@@ -448,6 +448,7 @@ export class SubscriptionsService {
                 currency: pricing.currency,
                 status: TransactionStatus.FAILED,
                 provider: 'stripe',
+                providerTransactionId: chargeResult.transactionId,
                 providerCustomerId: customerId,
                 errorCode: chargeResult.errorCode,
                 errorMessage: chargeResult.errorMessage,
@@ -1104,6 +1105,7 @@ export class SubscriptionsService {
                 currency: tenant.subscription.currency,
                 status: TransactionStatus.FAILED,
                 provider: 'stripe',
+                providerTransactionId: chargeResult.transactionId,
                 errorCode: chargeResult.errorCode,
                 errorMessage: chargeResult.errorMessage,
                 metadata: {
@@ -1212,6 +1214,7 @@ export class SubscriptionsService {
                 currency: tenant.subscription.currency,
                 status: TransactionStatus.FAILED,
                 provider: 'stripe',
+                providerTransactionId: chargeResult.transactionId,
                 errorCode: chargeResult.errorCode,
                 errorMessage: chargeResult.errorMessage,
                 isRetry: retryAttempt > 1,
@@ -1231,11 +1234,18 @@ export class SubscriptionsService {
      * @important El nuevo periodo SIEMPRE empieza desde la fecha
      * de vencimiento original, NO desde la fecha de cobro exitoso.
      * Esto previene que usuarios ganen días gratis al retrasar el pago.
+     *
+     * @param options.onlyIfPeriodEnd - Renovar solo si el período actual
+     * sigue terminando en esta fecha (evita renovar dos veces)
+     * @returns true si se renovó
+     *
+     * Pública porque también la usa SubscriptionsWebhookHandler.
     */
-    private async renewSubscription(
+    async renewSubscription(
     tenant: TenantDocument,
     transactionId: string,
-    ): Promise<void> {
+    options: { onlyIfPeriodEnd?: Date } = {},
+    ): Promise<boolean> {
     // CORRECTO - Usar fecha de vencimiento original
     const originalPeriodEnd = new Date(tenant.subscription.currentPeriodEnd);
     
@@ -1261,9 +1271,7 @@ export class SubscriptionsService {
         `Nuevo periodo: ${newPeriodStart.toISOString()} - ${newPeriodEnd.toISOString()}`
     );
 
-    await this.tenantModel.findByIdAndUpdate(
-        tenant._id,
-        {
+    const update = {
         $set: {
             'subscription.status': SubscriptionStatus.ACTIVE,
             'subscription.currentPeriodStart': newPeriodStart,      // ← Vencimiento original
@@ -1281,14 +1289,34 @@ export class SubscriptionsService {
             reason: `Renewed - Transaction: ${transactionId}`,
             },
         },
-        },
-    );
+    };
+
+    // Renovación protegida (la usan los webhooks): solo se aplica si el
+    // período sigue siendo el que leímos. Si otro proceso renovó en el
+    // mismo instante, MongoDB no encuentra el documento y no se renueva
+    // dos veces.
+    if (options.onlyIfPeriodEnd) {
+        const updated = await this.tenantModel.findOneAndUpdate(
+            {
+                _id: tenant._id,
+                'subscription.currentPeriodEnd': options.onlyIfPeriodEnd,
+            },
+            update,
+        );
+        return updated !== null;
+    }
+
+    await this.tenantModel.findByIdAndUpdate(tenant._id, update);
+    return true;
     }
 
     /**
      * Hacer downgrade a FREE
+     *
+     * @description Pública porque también la usa SubscriptionsWebhookHandler
+     * (reembolsos y disputas).
      */
-    private async downgradeToFree(
+    async downgradeToFree(
         tenant: TenantDocument,
         reason: string,
     ): Promise<void> {
@@ -1339,8 +1367,10 @@ export class SubscriptionsService {
 
     /**
      * Crear registro de transacción
+     *
+     * @description Pública porque también la usa SubscriptionsWebhookHandler.
      */
-    private async createTransaction(data: {
+    async createTransaction(data: {
         tenantId: string;
         type: TransactionType;
         plan: string;
@@ -1354,6 +1384,9 @@ export class SubscriptionsService {
         errorMessage?: string;
         isRetry?: boolean;
         retryAttempt?: number;
+        possibleDuplicate?: boolean;
+        requiresReview?: boolean;
+        reviewReason?: string;
         metadata?: any;
     }): Promise<void> {
         const transaction = new this.transactionModel({
@@ -1370,6 +1403,9 @@ export class SubscriptionsService {
             errorMessage: data.errorMessage,
             isRetry: data.isRetry || false,
             retryAttempt: data.retryAttempt,
+            possibleDuplicate: data.possibleDuplicate || false,
+            requiresReview: data.requiresReview || false,
+            reviewReason: data.reviewReason,
             metadata: data.metadata,
         });
 

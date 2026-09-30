@@ -15,6 +15,7 @@ import {
   WEBHOOK_ADAPTERS,
   WEBHOOK_STALE_PROCESSING_MS,
   WebhookEventStatus,
+  WebhookEventType,
   getErrorMessage,
   getErrorStack,
 } from '../../common/index.js';
@@ -26,8 +27,10 @@ import type {
 import {
   InvalidWebhookSignatureError,
   WebhookNotConfiguredError,
+  WebhookRetryLaterError,
 } from '../../common/providers/webhooks/index.js';
 import { WebhookEvent, WebhookEventDocument } from './entities/index.js';
+import { SubscriptionsWebhookHandler } from '../subscriptions/index.js';
 
 /** Respuesta que recibe el proveedor */
 export interface WebhookHandleResult {
@@ -82,6 +85,7 @@ export class WebhooksService {
     private readonly webhookEventModel: Model<WebhookEventDocument>,
     @Inject(WEBHOOK_ADAPTERS)
     adapters: IWebhookAdapter[],
+    private readonly subscriptionsHandler: SubscriptionsWebhookHandler,
   ) {
     this.adapters = new Map(
       adapters.map((adapter) => [adapter.provider, adapter]),
@@ -128,6 +132,24 @@ export class WebhooksService {
 
       return { received: true, duplicate: false };
     } catch (error) {
+      // Caso esperado: hay que esperar (ej: nuestro flujo aún guarda el
+      // cobro). No es un error del sistema: aviso y 409 para el reenvío.
+      if (error instanceof WebhookRetryLaterError) {
+        this.logger.warn(
+          `Evento ${event.provider}/${event.eventId} pospuesto: ${error.message}`,
+        );
+        await this.webhookEventModel.updateOne(
+          { provider: event.provider, eventId: event.eventId },
+          {
+            $set: {
+              status: WebhookEventStatus.FAILED,
+              lastError: error.message,
+            },
+          },
+        );
+        throw new ConflictException('El evento se procesará en un reenvío');
+      }
+
       this.logger.error(
         `Error procesando ${event.provider}/${event.eventId} (${event.originalType})`,
         getErrorStack(error),
@@ -260,24 +282,29 @@ export class WebhooksService {
    *
    * @returns true si se aplicó una acción; false si no requería acción
    *
-   * @description FASE 02: solo registra. En la fase 03 cada tipo de
-   * evento se conectará con su regla en SubscriptionsService
-   * (confirmar cobros, marcar reembolsos, actualizar tarjeta...).
+   * @description Las reglas viven en el módulo al que pertenecen (las
+   * de suscripciones en SubscriptionsWebhookHandler). Este servicio solo
+   * decide a quién le toca cada tipo de evento.
    */
-  private dispatch(event: NormalizedWebhookEvent): Promise<boolean> {
-    if (event.type === null) {
-      this.logger.debug(
-        `Evento sin interés para ManageCharge: ${event.originalType}`,
-      );
-      return Promise.resolve(false);
+  private async dispatch(event: NormalizedWebhookEvent): Promise<boolean> {
+    switch (event.type) {
+      case WebhookEventType.PAYMENT_SUCCEEDED:
+        return this.subscriptionsHandler.handlePaymentSucceeded(event);
+      case WebhookEventType.PAYMENT_FAILED:
+        return this.subscriptionsHandler.handlePaymentFailed(event);
+      case WebhookEventType.PAYMENT_REFUNDED:
+        return this.subscriptionsHandler.handlePaymentRefunded(event);
+      case WebhookEventType.PAYMENT_DISPUTED:
+        return this.subscriptionsHandler.handlePaymentDisputed(event);
+      case WebhookEventType.PAYMENT_METHOD_UPDATED:
+        return this.subscriptionsHandler.handlePaymentMethodUpdated(event);
+      case WebhookEventType.PAYMENT_METHOD_DETACHED:
+        return this.subscriptionsHandler.handlePaymentMethodDetached(event);
+      case null:
+        this.logger.debug(
+          `Evento sin interés para ManageCharge: ${event.originalType}`,
+        );
+        return false;
     }
-
-    this.logger.log(
-      `Evento ${event.type} (${event.eventId}) verificado. ` +
-        'Reglas de negocio pendientes (fase 03).',
-    );
-    // Devuelve una Promise porque en la fase 03 aquí se consultará la
-    // base de datos (operaciones asíncronas).
-    return Promise.resolve(false);
   }
 }

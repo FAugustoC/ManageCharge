@@ -58,6 +58,11 @@ export interface NormalizedWebhookData {
   errorMessage?: string;
   /** Datos de la tarjeta, en eventos de método de pago */
   card?: NormalizedCardData;
+  /**
+   * Metadata que ManageCharge adjuntó al crear el cobro
+   * (ej: { tenantId, type: 'renewal', attempt: '2' })
+   */
+  metadata?: Record<string, string>;
 }
 
 /**

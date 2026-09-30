@@ -280,3 +280,4 @@ TenantSchema.index({ 'subscription.plan': 1 }); // Filtrar por plan
 TenantSchema.index({ 'subscription.status': 1 }); // Filtrar por status
 TenantSchema.index({ 'subscription.currentPeriodEnd': 1 }); // Para cron jobs
 TenantSchema.index({ 'subscription.autoRenew': 1, 'subscription.currentPeriodEnd': 1 }); // Para renovaciones
+TenantSchema.index({ 'subscription.paymentMethod.paymentMethodId': 1 }); // Webhooks: tarjeta actualizada o desvinculada

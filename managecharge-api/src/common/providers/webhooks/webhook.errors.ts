@@ -1,9 +1,10 @@
 /**
- * Errores de los adaptadores de webhooks
+ * Errores de webhooks
  *
- * @description Los lanza cualquier adaptador (Stripe, CyberSource...).
- * WebhooksService los reconoce con instanceof y los convierte en la
- * respuesta HTTP correcta para el proveedor.
+ * @description Los lanzan los adaptadores (Stripe, CyberSource...) o las
+ * reglas de negocio que procesan los eventos. WebhooksService los
+ * reconoce con instanceof y los convierte en la respuesta HTTP correcta
+ * para el proveedor.
  */
 
 /**
@@ -25,5 +26,20 @@ export class WebhookNotConfiguredError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'WebhookNotConfiguredError';
+  }
+}
+
+/**
+ * Todavía no se puede procesar el evento; hay que esperar
+ * → HTTP 409 (el proveedor lo reenviará más tarde)
+ *
+ * @example Llega la confirmación de un cobro que nuestro propio flujo
+ * aún está guardando. Se espera unos minutos antes de concluir que es
+ * un cobro "huérfano".
+ */
+export class WebhookRetryLaterError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WebhookRetryLaterError';
   }
 }
